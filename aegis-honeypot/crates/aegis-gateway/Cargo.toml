@@ -1,0 +1,31 @@
+[package]
+name = "aegis-gateway"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "aegis-gateway"
+path = "src/main.rs"
+
+[dependencies]
+aegis-common    = { path = "../aegis-common" }
+aegis-collector = { path = "../aegis-collector" }
+aegis-vmm       = { path = "../aegis-vmm" }
+aegis-forensics = { path = "../aegis-forensics" }
+aegis-ebpf      = { path = "../aegis-ebpf" }
+tokio           = { workspace = true }
+russh           = { workspace = true }
+russh-keys      = { workspace = true }
+async-trait     = { workspace = true }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+tracing         = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow          = { workspace = true }
+chrono          = { workspace = true }
+regex           = { workspace = true }
+bytes           = { workspace = true }
+sha2            = { workspace = true }
+hex             = { workspace = true }
+reqwest         = { version = "0.12", features = ["blocking"] }
+uuid            = { workspace = true }

@@ -1,0 +1,18 @@
+[package]
+name = "aegis-forensics"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aegis-common  = { path = "../aegis-common" }
+tokio         = { workspace = true }
+serde         = { workspace = true }
+serde_json    = { workspace = true }
+sha2          = { workspace = true }
+hex           = { workspace = true }
+regex         = { workspace = true }
+walkdir       = { workspace = true }
+chrono        = { workspace = true }
+tracing       = { workspace = true }
+anyhow        = { workspace = true }
+uuid          = { workspace = true }

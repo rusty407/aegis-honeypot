@@ -1,0 +1,14 @@
+[package]
+name = "aegis-ebpf-programs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aya-ebpf = "0.1"
+
+[[bin]]
+name = "aegis-probes"
+path = "src/main.rs"
+
+# Build for BPF target:
+#   cargo +nightly build --target bpfel-unknown-none -Z build-std=core

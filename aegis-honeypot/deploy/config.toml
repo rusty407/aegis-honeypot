@@ -1,0 +1,23 @@
+# aegis-honeypot deployment config
+
+[gateway]
+bind_addr    = "0.0.0.0"
+port         = 2222
+max_sessions = 512
+host_key_path = "./host_key.pem"   # Remove to use ephemeral key
+
+[vmm]
+rootfs_path     = "./rootfs"          # Unused in Option A (fake shell)
+overlay_base    = "./overlay"
+memory_limit_mb = 256
+cpu_quota_percent = 20
+
+[forensics]
+quarantine_dir  = "./quarantine"
+sessions_dir    = "./sessions"
+attacks_log     = "./attacks.json"
+string_min_len  = 6
+
+[logging]
+level = "info"
+json  = false
