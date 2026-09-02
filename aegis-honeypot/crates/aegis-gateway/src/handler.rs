@@ -71,7 +71,7 @@ fn fake_wget_progress(url: &str, size_kb: usize) -> String {
     let host = url.split('/').nth(2).unwrap_or("example.com");
     let size_bytes = size_kb * 1024;
     format!(
-        "--2026-08-27 18:25:00--  {url}\r\nResolving {host} ({host})... 1.2.3.4\r\nConnecting to {host}|1.2.3.4|:80... connected.\r\nHTTP request sent, awaiting response... 200 OK\r\nLength: {size_bytes} ({size_kb}K) [application/octet-stream]\r\nSaving to: '{filename}'\r\n\r\n{filename}   100%[===================>]  {size_kb}.00K  --.-KB/s    in 0.1s\r\n\r\n2026-08-27 18:25:01 (512 KB/s) - '{filename}' saved [{size_bytes}]\r\n"
+        "--2026-08-27 18:25:00--  {url}\r\nResolving {host} ({host})... 192.0.2.1\r\nConnecting to {host}|192.0.2.1|:80... connected.\r\nHTTP request sent, awaiting response... 200 OK\r\nLength: {size_bytes} ({size_kb}K) [application/octet-stream]\r\nSaving to: '{filename}'\r\n\r\n{filename}   100%[===================>]  {size_kb}.00K  --.-KB/s    in 0.1s\r\n\r\n2026-08-27 18:25:01 (512 KB/s) - '{filename}' saved [{size_bytes}]\r\n"
     )
 }
 
@@ -133,7 +133,6 @@ impl SessionHandler {
             return;
         }
         self.is_ended = true;
-
         let duration = self.session_start.elapsed().as_secs_f64();
         self.event_tx.send(TelemetryEvent::SessionEnd(SessionEndEvent {
             timestamp: Utc::now(),
@@ -203,7 +202,7 @@ impl Handler for SessionHandler {
             port: self.meta.client_port,
         })).await;
 
-        let banner = "\r\nLinux ubuntu-server-01 5.15.0-72-generic #79-Ubuntu SMP x86_64\r\nWelcome to Ubuntu 22.04.2 LTS (GNU/Linux 5.15.0-72-generic x86_64)\r\n\r\n * Documentation:  https://help.ubuntu.com\r\n * Management:     https://landscape.canonical.com\r\n * Support:        https://ubuntu.com/advantage\r\n\r\nLast login: Mon Aug 26 22:14:07 2026 from 192.168.1.100\r\n\r\n";
+        let banner = "\r\nLinux ubuntu-server-01 5.15.0-72-generic #79-Ubuntu SMP x86_64\r\nWelcome to Ubuntu 22.04.2 LTS (GNU/Linux 5.15.0-72-generic x86_64)\r\n\r\n * Documentation:  https://help.ubuntu.com\r\n * Management:     https://landscape.canonical.com\r\n * Support:        https://ubuntu.com/advantage\r\n\r\nLast login: Mon Aug 26 22:14:07 2026 from 192.0.2.100\r\n\r\n";
         self.send_output(channel, banner, session).await;
         let prompt = self.get_prompt();
         self.send_output(channel, &prompt, session).await;

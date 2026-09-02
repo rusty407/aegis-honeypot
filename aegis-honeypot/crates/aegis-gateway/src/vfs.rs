@@ -845,7 +845,7 @@ fn build_default_fs() -> DirNode {
                 .insert("syslog", file!("Aug 27 18:00:01 ubuntu-server-01 systemd[1]: Starting Daily apt download activities...\n"))
                 .insert("dpkg.log", file!("2026-08-20 14:00:00 status installed linux-image-5.15.0-72-generic:amd64\n"))
                 .insert("nginx", dir!(DirNode::new()
-                    .insert("access.log", file!("192.168.1.100 - - [27/Aug/2026:18:00:00 +0000] \"GET / HTTP/1.1\" 200 612\n"))
+                    .insert("access.log", file!("192.0.2.100 - - [27/Aug/2026:18:00:00 +0000] \"GET / HTTP/1.1\" 200 612\n"))
                 ))
             ))
             .insert("run", dir!(DirNode::new()))

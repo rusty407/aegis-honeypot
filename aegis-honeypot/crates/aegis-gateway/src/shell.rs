@@ -43,9 +43,9 @@ tcp      LISTEN   0       128           127.0.0.1:3306          0.0.0.0:*     us
 
 const IFCONFIG: &str = "\
 eth0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500\r\n\
-        inet 10.0.0.4  netmask 255.255.255.0  broadcast 10.0.0.255\r\n\
-        inet6 fe80::215:5dff:fe00:1  prefixlen 64  scopeid 0x20<link>\r\n\
-        ether 00:15:5d:00:00:01  txqueuelen 1000  (Ethernet)\r\n\
+        inet 192.0.2.15  netmask 255.255.255.0  broadcast 192.0.2.255\r\n\
+        inet6 fe80::200:5eff:fe00:1  prefixlen 64  scopeid 0x20<link>\r\n\
+        ether 02:00:5e:00:00:01  txqueuelen 1000  (Ethernet)\r\n\
         RX packets 184293 bytes 217234891 (207.2 MiB)\r\n\
         TX packets 40237 bytes 5827433 (5.5 MiB)\r\n\
 \r\n\
@@ -60,8 +60,8 @@ const IP_A: &str = "\
     link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00\r\n\
     inet 127.0.0.1/8 scope host lo\r\n\
 2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP group default qlen 1000\r\n\
-    link/ether 00:15:5d:00:00:01 brd ff:ff:ff:ff:ff:ff\r\n\
-    inet 10.0.0.4/24 brd 10.0.0.255 scope global eth0\r\n\
+    link/ether 02:00:5e:00:00:01 brd ff:ff:ff:ff:ff:ff\r\n\
+    inet 192.0.2.15/24 brd 192.0.2.255 scope global eth0\r\n\
 ";
 
 const LSCPU: &str = "\
@@ -85,7 +85,7 @@ const CRONTAB_L: &str = "\
 # Edit this file to introduce tasks to be run by cron.\r\n\
 # m h  dom mon dow   command\r\n\
 0 2 * * *  /bin/bash /root/backup.sh >> /var/log/backup.log 2>&1\r\n\
-*/15 * * * *  curl -s http://monitoring.internal/health > /dev/null\r\n\
+*/15 * * * *  curl -s http://monitoring.example.com/health > /dev/null\r\n\
 ";
 
 const ENV: &str = "\
@@ -101,10 +101,10 @@ _=/usr/bin/env\r\n\
 ";
 
 const LAST: &str = "\
-root     pts/0        192.168.1.100    Mon Aug 26 22:14   still logged in\r\n\
-root     pts/0        185.220.101.45   Mon Aug 26 03:12 - 03:14  (00:01)\r\n\
-root     pts/0        45.33.32.156     Sun Aug 25 19:44 - 19:47  (00:02)\r\n\
-ubuntu   pts/1        192.168.1.100    Sat Aug 24 15:30 - 17:22  (01:52)\r\n\
+root     pts/0        192.0.2.100      Mon Aug 26 22:14   still logged in\r\n\
+root     pts/0        198.51.100.45    Mon Aug 26 03:12 - 03:14  (00:01)\r\n\
+root     pts/0        203.0.113.156    Sun Aug 25 19:44 - 19:47  (00:02)\r\n\
+ubuntu   pts/1        192.0.2.100      Sat Aug 24 15:30 - 17:22  (01:52)\r\n\
 \r\n\
 wtmp begins Wed Aug 01 00:00:00 2026\r\n\
 ";
@@ -127,7 +127,7 @@ const UPTIME: &str = " 18:25:01 up 15 days,  6:12,  1 user,  load average: 0.12,
 const W: &str = "\
  18:25:01 up 15 days,  6:12,  1 user,  load average: 0.12, 0.08, 0.03\r\n\
 USER     TTY      FROM             LOGIN@   IDLE JCPU   PCPU WHAT\r\n\
-root     pts/0    192.168.1.100   18:12    0.00s  0.06s  0.01s -bash\r\n\
+root     pts/0    192.0.2.100     18:12    0.00s  0.06s  0.01s -bash\r\n\
 ";
 
 /// Dispatch a shell command and return the fake response string.
@@ -226,7 +226,7 @@ fn dispatch_pure(cmd: &str, vfs: &mut VirtualFileSystem) -> String {
         }
         "last"      => LAST.into(),
         "w"         => W.into(),
-        "who"       => "root     pts/0        2026-08-26 22:14 (192.168.1.100)\r\n".into(),
+        "who"       => "root     pts/0        2026-08-26 22:14 (192.0.2.100)\r\n".into(),
         "uptime"    => UPTIME.into(),
         "df"        => DF_H.into(),
         "free"      => FREE_H.into(),
@@ -284,7 +284,7 @@ fn dispatch_pure(cmd: &str, vfs: &mut VirtualFileSystem) -> String {
         }
         "ping"      => {
             let host = args.split_whitespace().next().unwrap_or("host");
-            format!("PING {host} (93.184.216.34) 56(84) bytes of data.\r\n64 bytes from {host}: icmp_seq=1 ttl=51 time=11.3 ms\r\n^C\r\n")
+            format!("PING {host} (192.0.2.1) 56(84) bytes of data.\r\n64 bytes from {host}: icmp_seq=1 ttl=51 time=11.3 ms\r\n^C\r\n")
         }
         "nmap"      => {
             "Starting Nmap 7.80 ( https://nmap.org )\r\nnmap: You requested a scan type which requires root privileges.\r\n".into()

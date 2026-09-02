@@ -466,7 +466,7 @@ pub async fn ensure_golden_rootfs(base_path: impl AsRef<Path>) -> AegisResult<()
         &base.join("var/log/auth.log"),
         "Aug 27 18:00:01 ubuntu-server-01 CRON[1402]: pam_unix(cron:session): session opened for user root by (uid=0)\n\
          Aug 27 18:00:01 ubuntu-server-01 CRON[1402]: pam_unix(cron:session): session closed for user root\n\
-         Aug 27 18:25:01 ubuntu-server-01 sshd[1842]: Accepted password for root from 192.168.1.100 port 52341 ssh2\n",
+         Aug 27 18:25:01 ubuntu-server-01 sshd[1842]: Accepted password for root from 192.0.2.100 port 52341 ssh2\n",
         0o640,
     ).await?;
 

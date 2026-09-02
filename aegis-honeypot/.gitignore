@@ -9,16 +9,8 @@ sessions/*
 !sessions/.gitkeep
 overlay/*
 !overlay/.gitkeep
-aegis-honeypot/quarantine/*
-!aegis-honeypot/quarantine/.gitkeep
-aegis-honeypot/sessions/*
-!aegis-honeypot/sessions/.gitkeep
-aegis-honeypot/overlay/*
-!aegis-honeypot/overlay/.gitkeep
 attacks.json
-aegis-honeypot/attacks.json
 host_key.pem
-aegis-honeypot/host_key.pem
 
 # Environment & secrets
 .env
