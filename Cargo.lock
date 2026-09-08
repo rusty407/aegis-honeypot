@@ -50,9 +50,11 @@ dependencies = [
  "anyhow",
  "axum",
  "chrono",
+ "futures-util",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-stream",
  "tracing",
  "tracing-subscriber",
 ]

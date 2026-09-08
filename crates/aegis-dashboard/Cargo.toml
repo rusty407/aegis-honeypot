@@ -15,3 +15,5 @@ chrono = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
+futures-util = { workspace = true }
+tokio-stream = { workspace = true }

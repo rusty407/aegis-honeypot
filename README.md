@@ -86,7 +86,7 @@ Unlike traditional honeypots that either run high-risk real virtual machines (pr
 | **`aegis-collector`** | `crates/aegis-collector` | High-throughput telemetry pipeline, JSON log aggregator, and `.cast` session recorder. |
 | **`aegis-ebpf`** | `crates/aegis-ebpf` | Aya-powered eBPF probe loader and ring buffer telemetry consumer. |
 | **`aegis-common`** | `crates/aegis-common` | Shared data schemas, event definitions, and configuration structs. |
-| **`aegis-dashboard`** | `crates/aegis-dashboard` | Read-only web UI: tails `attacks.json` and serves a live stats + feed dashboard. |
+| **`aegis-dashboard`** | `crates/aegis-dashboard` | Read-only web UI: tails `attacks.json`, streams live events over SSE, and replays session recordings in-browser. |
 
 ---
 
@@ -141,7 +141,9 @@ In a third terminal, start the dashboard (a separate, unprivileged process — i
 ./target/release/aegis-dashboard deploy/config.toml
 ```
 
-Open **http://127.0.0.1:8080** for live stats, top credentials/commands, an hourly activity chart, and a live event feed. It binds to loopback only by default — see the `[dashboard]` section in Configuration below to expose it elsewhere (it has no authentication, so only do this on a trusted network).
+Open **http://127.0.0.1:8080** for live stats, top credentials/commands/source IPs, an hourly activity chart, and a real-time event feed pushed over Server-Sent Events (no polling delay). It binds to loopback only by default — see the `[dashboard]` section in Configuration below to expose it elsewhere (it has no authentication, so only do this on a trusted network).
+
+Click any session ID in the feed to drill down: full event timeline for that session, plus an in-browser replay of the actual terminal recording (`sessions/*.cast`) with play/pause and speed controls — no external player or CDN dependency, just a small bundled terminal-buffer emulator. Click a source IP anywhere to filter the feed to that attacker. Captured payloads get their own panel with expandable IOC details (extracted IPs, URLs, base64 blobs, Monero wallets).
 
 ---
 

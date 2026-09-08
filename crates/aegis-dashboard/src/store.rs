@@ -26,6 +26,7 @@ pub struct Store {
     total_credentials: u64,
     total_payloads: u64,
     unique_ips: HashSet<IpAddr>,
+    ip_counts: HashMap<IpAddr, u64>,
     username_counts: HashMap<String, u64>,
     password_counts: HashMap<String, u64>,
     command_counts: HashMap<String, u64>,
@@ -39,33 +40,31 @@ impl Store {
     pub fn ingest(&mut self, event: TelemetryEvent) {
         self.bump_hour(event_timestamp(&event));
 
+        let ip = event_ip(&event);
+        self.unique_ips.insert(ip);
+        *self.ip_counts.entry(ip).or_insert(0) += 1;
+
         match &event {
-            TelemetryEvent::SessionStart(e) => {
+            TelemetryEvent::SessionStart(_) => {
                 self.total_sessions += 1;
-                self.unique_ips.insert(e.ip);
             }
             TelemetryEvent::CommandRun(e) => {
                 self.total_commands += 1;
-                self.unique_ips.insert(e.ip);
                 let verb = e.command.split_whitespace().next().unwrap_or(&e.command);
                 *self.command_counts.entry(verb.to_string()).or_insert(0) += 1;
             }
             TelemetryEvent::CredentialHarvest(e) => {
                 self.total_credentials += 1;
-                self.unique_ips.insert(e.ip);
                 *self.username_counts.entry(e.username.clone()).or_insert(0) += 1;
                 if let Some(pw) = &e.password {
                     *self.password_counts.entry(pw.clone()).or_insert(0) += 1;
                 }
             }
-            TelemetryEvent::PayloadCaptured(e) => {
+            TelemetryEvent::PayloadCaptured(_) => {
                 self.total_payloads += 1;
-                self.unique_ips.insert(e.ip);
             }
-            TelemetryEvent::SessionEnd(e) => {
-                self.unique_ips.insert(e.ip);
-            }
-            TelemetryEvent::SyscallExecve(_)
+            TelemetryEvent::SessionEnd(_)
+            | TelemetryEvent::SyscallExecve(_)
             | TelemetryEvent::SyscallConnect(_)
             | TelemetryEvent::SyscallMemfdCreate(_) => {}
         }
@@ -93,6 +92,7 @@ impl Store {
             top_usernames: top_n(&self.username_counts),
             top_passwords: top_n(&self.password_counts),
             top_commands: top_n(&self.command_counts),
+            top_ips: top_n_ip(&self.ip_counts),
             hourly_activity: self
                 .hourly_activity
                 .iter()
@@ -112,13 +112,24 @@ impl Store {
     }
 
     /// Most recent events, newest first, optionally filtered to one event
-    /// kind (matched against [`event_kind`], case-insensitively).
-    pub fn recent_events(&self, limit: usize, kind: Option<&str>) -> Vec<&TelemetryEvent> {
+    /// kind (matched against [`event_kind`], case-insensitively) and/or one
+    /// source IP.
+    pub fn recent_events(&self, limit: usize, kind: Option<&str>, ip: Option<IpAddr>) -> Vec<&TelemetryEvent> {
         self.recent
             .iter()
             .rev()
             .filter(|e| kind.map(|k| event_kind(e).eq_ignore_ascii_case(k)).unwrap_or(true))
+            .filter(|e| ip.map(|target| event_ip(e) == target).unwrap_or(true))
             .take(limit)
+            .collect()
+    }
+
+    /// Every buffered event belonging to one session, oldest first — the
+    /// full (recent-window-bounded) timeline for a session drill-down view.
+    pub fn session_events(&self, session_id: &str) -> Vec<&TelemetryEvent> {
+        self.recent
+            .iter()
+            .filter(|e| e.session_id().map(|id| id.0 == session_id).unwrap_or(false))
             .collect()
     }
 }
@@ -127,6 +138,16 @@ fn top_n(counts: &HashMap<String, u64>) -> Vec<Ranked> {
     let mut ranked: Vec<Ranked> = counts
         .iter()
         .map(|(value, &count)| Ranked { value: value.clone(), count })
+        .collect();
+    ranked.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value)));
+    ranked.truncate(TOP_N);
+    ranked
+}
+
+fn top_n_ip(counts: &HashMap<IpAddr, u64>) -> Vec<Ranked> {
+    let mut ranked: Vec<Ranked> = counts
+        .iter()
+        .map(|(ip, &count)| Ranked { value: ip.to_string(), count })
         .collect();
     ranked.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.value.cmp(&b.value)));
     ranked.truncate(TOP_N);
@@ -143,6 +164,19 @@ fn event_timestamp(event: &TelemetryEvent) -> DateTime<Utc> {
         TelemetryEvent::SyscallConnect(e) => e.timestamp,
         TelemetryEvent::SyscallMemfdCreate(e) => e.timestamp,
         TelemetryEvent::PayloadCaptured(e) => e.timestamp,
+    }
+}
+
+fn event_ip(event: &TelemetryEvent) -> IpAddr {
+    match event {
+        TelemetryEvent::SessionStart(e) => e.ip,
+        TelemetryEvent::SessionEnd(e) => e.ip,
+        TelemetryEvent::CredentialHarvest(e) => e.ip,
+        TelemetryEvent::CommandRun(e) => e.ip,
+        TelemetryEvent::SyscallExecve(e) => e.ip,
+        TelemetryEvent::SyscallConnect(e) => e.ip,
+        TelemetryEvent::SyscallMemfdCreate(e) => e.ip,
+        TelemetryEvent::PayloadCaptured(e) => e.ip,
     }
 }
 
@@ -183,6 +217,7 @@ pub struct Summary {
     pub top_usernames: Vec<Ranked>,
     pub top_passwords: Vec<Ranked>,
     pub top_commands: Vec<Ranked>,
+    pub top_ips: Vec<Ranked>,
     pub hourly_activity: Vec<HourBucket>,
 }
 
@@ -243,13 +278,13 @@ mod tests {
             auth_method: AuthMethod::Password,
         }));
 
-        let all = store.recent_events(100, None);
+        let all = store.recent_events(100, None, None);
         assert_eq!(all.len(), 6);
 
-        let cmds_only = store.recent_events(100, Some("command_run"));
+        let cmds_only = store.recent_events(100, Some("command_run"), None);
         assert_eq!(cmds_only.len(), 5);
 
-        let capped = store.recent_events(2, None);
+        let capped = store.recent_events(2, None, None);
         assert_eq!(capped.len(), 2);
         // Newest first: the credential-harvest event was ingested last.
         assert!(matches!(capped[0], TelemetryEvent::CredentialHarvest(_)));
@@ -266,7 +301,69 @@ mod tests {
                 command: format!("cmd{i}"),
             }));
         }
-        assert_eq!(store.recent_events(usize::MAX, None).len(), RECENT_CAP);
+        assert_eq!(store.recent_events(usize::MAX, None, None).len(), RECENT_CAP);
         assert_eq!(store.summary().total_commands, (RECENT_CAP + 50) as u64);
+    }
+
+    #[test]
+    fn tracks_top_ips_and_filters_events_by_ip() {
+        let mut store = Store::default();
+        let other_ip = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 9));
+
+        for _ in 0..3 {
+            store.ingest(TelemetryEvent::CommandRun(CommandRunEvent {
+                timestamp: Utc::now(),
+                session_id: SessionId::new(),
+                ip: ip(),
+                command: "id".into(),
+            }));
+        }
+        store.ingest(TelemetryEvent::CommandRun(CommandRunEvent {
+            timestamp: Utc::now(),
+            session_id: SessionId::new(),
+            ip: other_ip,
+            command: "whoami".into(),
+        }));
+
+        let summary = store.summary();
+        assert_eq!(summary.unique_ips, 2);
+        assert_eq!(summary.top_ips[0].value, ip().to_string());
+        assert_eq!(summary.top_ips[0].count, 3);
+
+        let filtered = store.recent_events(100, None, Some(other_ip));
+        assert_eq!(filtered.len(), 1);
+        assert!(matches!(filtered[0], TelemetryEvent::CommandRun(e) if e.command == "whoami"));
+    }
+
+    #[test]
+    fn session_events_returns_only_that_sessions_timeline_oldest_first() {
+        let mut store = Store::default();
+        let target = SessionId::new();
+
+        store.ingest(TelemetryEvent::CredentialHarvest(CredentialHarvestEvent {
+            timestamp: Utc::now(),
+            session_id: target.clone(),
+            ip: ip(),
+            username: "root".into(),
+            password: Some("toor".into()),
+            auth_method: AuthMethod::Password,
+        }));
+        store.ingest(TelemetryEvent::CommandRun(CommandRunEvent {
+            timestamp: Utc::now(),
+            session_id: SessionId::new(),
+            ip: ip(),
+            command: "not this session".into(),
+        }));
+        store.ingest(TelemetryEvent::CommandRun(CommandRunEvent {
+            timestamp: Utc::now(),
+            session_id: target.clone(),
+            ip: ip(),
+            command: "whoami".into(),
+        }));
+
+        let timeline = store.session_events(&target.0);
+        assert_eq!(timeline.len(), 2);
+        assert!(matches!(timeline[0], TelemetryEvent::CredentialHarvest(_)));
+        assert!(matches!(timeline[1], TelemetryEvent::CommandRun(e) if e.command == "whoami"));
     }
 }

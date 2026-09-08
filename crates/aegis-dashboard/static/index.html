@@ -15,6 +15,7 @@
     --accent-dim: #1f5c44;
     --warn: #f0b429;
     --danger: #ef5350;
+    --link: #7db8f5;
     --mono: "SF Mono", "Fira Code", ui-monospace, Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
@@ -32,6 +33,10 @@
     gap: 12px;
     padding: 18px 24px;
     border-bottom: 1px solid var(--panel-border);
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 5;
   }
   header h1 {
     font-size: 16px;
@@ -41,10 +46,13 @@
   }
   header .sub { color: var(--muted); font-size: 12px; }
   #status { margin-left: auto; font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
-  #status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 6px var(--accent); animation: pulse 2s infinite; }
+  #status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  #status .dot.live { animation: pulse 2s infinite; }
+  #status .dot.down { background: var(--danger); box-shadow: 0 0 6px var(--danger); animation: none; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @keyframes flash { 0% { background: rgba(61,220,151,0.18); } 100% { background: transparent; } }
 
-  main { padding: 20px 24px 40px; max-width: 1280px; margin: 0 auto; }
+  main { padding: 20px 24px 40px; max-width: 1320px; margin: 0 auto; }
 
   .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px; }
   .stat { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 6px; padding: 14px 16px; }
@@ -55,7 +63,8 @@
   @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } .stats { grid-template-columns: repeat(2, 1fr); } }
 
   .panel { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 6px; padding: 16px; margin-bottom: 16px; }
-  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 12px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .panel h2 .count { color: var(--accent); font-weight: 400; text-transform: none; letter-spacing: 0; }
 
   .chart { display: flex; align-items: flex-end; gap: 3px; height: 90px; }
   .chart .bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
@@ -66,27 +75,78 @@
   th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--panel-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; }
   td.count { color: var(--accent); text-align: right; font-variant-numeric: tabular-nums; }
-  .rank-tables { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
-  @media (max-width: 700px) { .rank-tables { grid-template-columns: 1fr; } }
+  .rank-tables { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  @media (max-width: 900px) { .rank-tables { grid-template-columns: 1fr 1fr; } }
+  .rank-tables td.clickable, .rank-tables th { cursor: default; }
+  .rank-tables tr.clickable { cursor: pointer; }
+  .rank-tables tr.clickable:hover td { color: var(--accent); }
+
+  .feed-controls { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; background: var(--accent-dim); color: var(--accent); border-radius: 999px; padding: 3px 10px; font-size: 11px; }
+  .chip button { background: none; border: none; color: inherit; cursor: pointer; font: inherit; padding: 0; line-height: 1; }
+  select#kind-filter { background: var(--bg); color: var(--text); border: 1px solid var(--panel-border); border-radius: 4px; padding: 3px 6px; font: inherit; font-size: 11px; }
 
   .feed { max-height: 560px; overflow-y: auto; }
   .feed table td:last-child { white-space: normal; word-break: break-word; }
+  .feed tbody tr { cursor: pointer; }
+  .feed tbody tr:hover td { background: rgba(255,255,255,0.03); }
+  .feed tbody tr.new-row { animation: flash 1.4s ease-out; }
   .badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; letter-spacing: 0.03em; }
-  .b-session_start, .b-session_end { background: #1e3a5f; color: #7db8f5; }
+  .b-session_start, .b-session_end { background: #1e3a5f; color: var(--link); }
   .b-credential_harvest { background: #4a3a12; color: var(--warn); }
   .b-command_run { background: #123a2e; color: var(--accent); }
   .b-payload_captured { background: #4a1414; color: var(--danger); }
   .b-syscall_execve, .b-syscall_connect, .b-syscall_memfd_create { background: #2a1a4a; color: #b892f0; }
   .ip { color: var(--muted); }
+  .ip.linklike:hover { color: var(--accent); text-decoration: underline; }
   .empty { color: var(--muted); font-style: italic; padding: 12px 0; }
+
+  .payload-row { cursor: pointer; }
+  .payload-detail { background: rgba(255,255,255,0.02); }
+  .payload-detail td { white-space: normal; word-break: break-all; font-size: 11px; color: var(--muted); padding: 8px 10px; }
+  .ioc-group { margin-bottom: 6px; }
+  .ioc-group b { color: var(--text); }
+
+  /* Session drill-down modal */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 40px 20px; z-index: 100; overflow-y: auto;
+  }
+  .modal { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 8px; width: 100%; max-width: 820px; padding: 20px; }
+  .modal-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .modal-head h3 { margin: 0; font-size: 14px; color: var(--accent); }
+  .modal-head button.close { margin-left: auto; background: none; border: 1px solid var(--panel-border); color: var(--muted); border-radius: 4px; padding: 4px 10px; cursor: pointer; font: inherit; }
+  .modal-section { margin-bottom: 16px; }
+  .modal-section h4 { font-size: 11px; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; letter-spacing: 0.06em; }
+  .modal-meta { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: var(--muted); }
+  .modal-meta b { color: var(--text); }
+  .timeline { max-height: 160px; overflow-y: auto; font-size: 12px; }
+  .timeline .t-row { display: flex; gap: 8px; padding: 3px 0; border-bottom: 1px dashed var(--panel-border); }
+  .timeline .t-time { color: var(--muted); width: 70px; flex-shrink: 0; }
+
+  .replay { background: #000; border-radius: 6px; padding: 12px; }
+  .replay pre {
+    margin: 0; color: #d7e1ea; font-family: var(--mono); font-size: 12px;
+    min-height: 220px; max-height: 320px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+  }
+  .replay-controls { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .replay-controls button {
+    background: var(--panel); border: 1px solid var(--panel-border); color: var(--text);
+    border-radius: 4px; padding: 4px 10px; cursor: pointer; font: inherit; font-size: 11px;
+  }
+  .replay-controls button:hover { border-color: var(--accent); color: var(--accent); }
+  .replay-controls .rtime { color: var(--muted); font-size: 11px; margin-left: auto; }
+
   footer { text-align: center; color: var(--panel-border); font-size: 11px; padding: 24px; }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <header>
   <h1>&#128737; AEGIS</h1>
   <span class="sub">live threat feed</span>
-  <div id="status"><span class="dot"></span><span id="status-text">connecting…</span></div>
+  <div id="status"><span class="dot" id="status-dot"></span><span id="status-text">connecting…</span></div>
 </header>
 
 <main>
@@ -98,50 +158,107 @@
   </div>
 
   <div class="grid">
-    <div class="panel feed">
-      <h2>Live Feed</h2>
-      <table>
-        <thead><tr><th style="width:70px">Time</th><th style="width:110px">Source IP</th><th style="width:150px">Event</th><th>Detail</th></tr></thead>
-        <tbody id="feed-body"><tr><td colspan="4" class="empty">waiting for events…</td></tr></tbody>
-      </table>
+    <div>
+      <div class="panel feed">
+        <h2>Live Feed <span class="count" id="feed-count"></span></h2>
+        <div class="feed-controls">
+          <select id="kind-filter">
+            <option value="">All events</option>
+            <option value="SESSION_START">Session start</option>
+            <option value="SESSION_END">Session end</option>
+            <option value="CREDENTIAL_HARVEST">Credential harvest</option>
+            <option value="COMMAND_RUN">Command run</option>
+            <option value="PAYLOAD_CAPTURED">Payload captured</option>
+          </select>
+          <span id="ip-filter-chip" hidden class="chip">
+            IP: <b id="ip-filter-value"></b>
+            <button id="ip-filter-clear" title="Clear IP filter">✕</button>
+          </span>
+        </div>
+        <table>
+          <thead><tr><th style="width:70px">Time</th><th style="width:110px">Source IP</th><th style="width:150px">Event</th><th>Detail</th></tr></thead>
+          <tbody id="feed-body"><tr><td colspan="4" class="empty">waiting for events…</td></tr></tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <h2>Captured Payloads <span class="count" id="payload-count"></span></h2>
+        <table>
+          <thead><tr><th style="width:70px">Time</th><th style="width:110px">IP</th><th style="width:140px">SHA-256</th><th style="width:70px">Size</th><th>Source</th></tr></thead>
+          <tbody id="payload-body"><tr><td colspan="5" class="empty">none captured yet</td></tr></tbody>
+        </table>
+      </div>
     </div>
 
     <div>
       <div class="panel">
-        <h2>Top Credentials &amp; Commands</h2>
+        <h2>Top Credentials, Commands &amp; Sources</h2>
         <div class="rank-tables">
           <div><table><thead><tr><th>Username</th><th></th></tr></thead><tbody id="top-users"></tbody></table></div>
           <div><table><thead><tr><th>Password</th><th></th></tr></thead><tbody id="top-passwords"></tbody></table></div>
           <div><table><thead><tr><th>Command</th><th></th></tr></thead><tbody id="top-commands"></tbody></table></div>
+          <div><table><thead><tr><th>Source IP</th><th></th></tr></thead><tbody id="top-ips"></tbody></table></div>
         </div>
       </div>
     </div>
   </div>
 </main>
 
-<footer>aegis-dashboard · reads attacks.json only · no credentials or payload contents leave this page</footer>
+<footer>aegis-dashboard · reads attacks.json + sessions/*.cast only · no credentials or payload contents leave this page</footer>
+
+<div class="modal-overlay" id="modal-overlay" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="modal-title">Session</h3>
+      <button class="close" id="modal-close">Close ✕</button>
+    </div>
+    <div class="modal-section">
+      <div class="modal-meta" id="modal-meta"></div>
+    </div>
+    <div class="modal-section">
+      <h4>Timeline</h4>
+      <div class="timeline" id="modal-timeline"></div>
+    </div>
+    <div class="modal-section">
+      <h4>Session Replay</h4>
+      <div class="replay">
+        <pre id="replay-screen"></pre>
+        <div class="replay-controls">
+          <button id="replay-playpause">▶ Play</button>
+          <button id="replay-speed">1×</button>
+          <button id="replay-restart">⟲ Restart</button>
+          <span class="rtime" id="replay-time"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <script>
-const REFRESH_MS = 4000;
+const state = {
+  feed: [],          // newest first, capped
+  kindFilter: '',
+  ipFilter: null,
+};
+const FEED_CAP = 500;
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+function fmtNum(n) { return new Intl.NumberFormat().format(n); }
 
-function fmtStat(n) {
-  return new Intl.NumberFormat().format(n);
-}
+// ---------------------------------------------------------------------------
+// Summary (stats, chart, rankings) — polled; cheap aggregate, not latency-critical
+// ---------------------------------------------------------------------------
 
 function renderStats(s) {
   const cards = [
-    ['Sessions', s.total_sessions],
-    ['Commands', s.total_commands],
-    ['Credentials', s.total_credentials],
-    ['Payloads', s.total_payloads],
+    ['Sessions', s.total_sessions], ['Commands', s.total_commands],
+    ['Credentials', s.total_credentials], ['Payloads', s.total_payloads],
     ['Unique IPs', s.unique_ips],
   ];
   document.getElementById('stats').innerHTML = cards.map(([label, value]) =>
-    `<div class="stat"><div class="value">${fmtStat(value)}</div><div class="label">${label}</div></div>`
+    `<div class="stat"><div class="value">${fmtNum(value)}</div><div class="label">${label}</div></div>`
   ).join('');
 }
 
@@ -159,18 +276,43 @@ function renderChart(buckets) {
   }).join('');
 }
 
-function renderRanked(elId, items, label) {
+function renderRanked(elId, items, clickable) {
   const el = document.getElementById(elId);
   if (!items.length) { el.innerHTML = `<tr><td colspan="2" class="empty">none yet</td></tr>`; return; }
-  el.innerHTML = items.map(r =>
-    `<tr><td title="${escapeHtml(r.value)}">${escapeHtml(r.value) || '<i>(empty)</i>'}</td><td class="count">${r.count}</td></tr>`
-  ).join('');
+  el.innerHTML = items.map(r => {
+    const cls = clickable ? ' class="clickable"' : '';
+    const dataAttr = clickable ? ` data-ip="${escapeHtml(r.value)}"` : '';
+    return `<tr${cls}${dataAttr}><td title="${escapeHtml(r.value)}">${escapeHtml(r.value) || '<i>(empty)</i>'}</td><td class="count">${r.count}</td></tr>`;
+  }).join('');
+  if (clickable) {
+    el.querySelectorAll('tr[data-ip]').forEach(row => {
+      row.addEventListener('click', () => setIpFilter(row.dataset.ip));
+    });
+  }
 }
+
+async function refreshSummary() {
+  try {
+    const res = await fetch('/api/summary');
+    if (!res.ok) throw new Error('bad response');
+    const summary = await res.json();
+    renderStats(summary);
+    renderChart(summary.hourly_activity);
+    renderRanked('top-users', summary.top_usernames, false);
+    renderRanked('top-passwords', summary.top_passwords, false);
+    renderRanked('top-commands', summary.top_commands, false);
+    renderRanked('top-ips', summary.top_ips, true);
+  } catch (e) { /* summary poll is best-effort; live status is tracked by the SSE connection */ }
+}
+
+// ---------------------------------------------------------------------------
+// Live feed — real-time via Server-Sent Events, filtered client-side
+// ---------------------------------------------------------------------------
 
 function eventDetail(ev) {
   switch (ev.event) {
-    case 'SESSION_START': return `session ${escapeHtml(ev.session_id)} opened on port ${ev.port}`;
-    case 'SESSION_END': return `session ${escapeHtml(ev.session_id)} closed after ${ev.duration_secs.toFixed(1)}s`;
+    case 'SESSION_START': return `session <a href="#" class="session-link" data-id="${escapeHtml(ev.session_id)}">${escapeHtml(ev.session_id)}</a> opened on port ${ev.port}`;
+    case 'SESSION_END': return `session <a href="#" class="session-link" data-id="${escapeHtml(ev.session_id)}">${escapeHtml(ev.session_id)}</a> closed after ${ev.duration_secs.toFixed(1)}s`;
     case 'CREDENTIAL_HARVEST': return `<b>${escapeHtml(ev.username)}</b> / <b>${escapeHtml(ev.password ?? '')}</b> (${ev.auth_method})`;
     case 'COMMAND_RUN': return `<code>${escapeHtml(ev.command)}</code>`;
     case 'PAYLOAD_CAPTURED': return `${escapeHtml(ev.sha256.slice(0, 16))}… (${ev.size_bytes}B) from ${escapeHtml(ev.source_url ?? 'unknown')}`;
@@ -181,46 +323,311 @@ function eventDetail(ev) {
   }
 }
 
-function renderFeed(events) {
+function filteredFeed() {
+  return state.feed.filter(ev =>
+    (!state.kindFilter || ev.event === state.kindFilter) &&
+    (!state.ipFilter || ev.ip === state.ipFilter)
+  );
+}
+
+function renderFeed(freshCount) {
+  const items = filteredFeed();
+  document.getElementById('feed-count').textContent = items.length ? `(${items.length})` : '';
   const el = document.getElementById('feed-body');
-  if (!events.length) { el.innerHTML = '<tr><td colspan="4" class="empty">waiting for events…</td></tr>'; return; }
-  el.innerHTML = events.map(ev => {
-    const badgeClass = 'b-' + ev.event.toLowerCase();
+  if (!items.length) { el.innerHTML = '<tr><td colspan="4" class="empty">waiting for events…</td></tr>'; return; }
+
+  el.innerHTML = items.slice(0, 200).map((ev, i) => {
     const time = new Date(ev.timestamp).toLocaleTimeString();
-    return `<tr>
+    const badgeClass = 'b-' + ev.event.toLowerCase();
+    const rowClass = i < freshCount ? ' class="new-row"' : '';
+    return `<tr${rowClass} data-session="${escapeHtml(ev.session_id)}">
       <td>${escapeHtml(time)}</td>
-      <td class="ip">${escapeHtml(ev.ip)}</td>
+      <td class="ip linklike" data-ip="${escapeHtml(ev.ip)}">${escapeHtml(ev.ip)}</td>
       <td><span class="badge ${badgeClass}">${escapeHtml(ev.event)}</span></td>
       <td>${eventDetail(ev)}</td>
     </tr>`;
   }).join('');
+
+  el.querySelectorAll('tr[data-session]').forEach(row => {
+    row.addEventListener('click', (e) => {
+      // IP click and session-link click are handled by their own listeners.
+      if (e.target.closest('.ip') || e.target.closest('.session-link')) return;
+      openSessionModal(row.dataset.session);
+    });
+  });
+  el.querySelectorAll('.ip[data-ip]').forEach(cell => {
+    cell.addEventListener('click', (e) => { e.stopPropagation(); setIpFilter(cell.dataset.ip); });
+  });
 }
 
-async function refresh() {
+function renderPayloads() {
+  const items = state.feed.filter(ev => ev.event === 'PAYLOAD_CAPTURED').slice(0, 50);
+  document.getElementById('payload-count').textContent = items.length ? `(${items.length})` : '';
+  const el = document.getElementById('payload-body');
+  if (!items.length) { el.innerHTML = '<tr><td colspan="5" class="empty">none captured yet</td></tr>'; return; }
+
+  el.innerHTML = items.map((ev, i) => {
+    const time = new Date(ev.timestamp).toLocaleTimeString();
+    return `<tr class="payload-row" data-idx="${i}">
+      <td>${escapeHtml(time)}</td>
+      <td class="ip">${escapeHtml(ev.ip)}</td>
+      <td title="${escapeHtml(ev.sha256)}">${escapeHtml(ev.sha256.slice(0, 16))}…</td>
+      <td>${ev.size_bytes}B</td>
+      <td>${escapeHtml(ev.source_url ?? 'unknown')}</td>
+    </tr>`;
+  }).join('');
+
+  el.querySelectorAll('tr.payload-row').forEach(row => {
+    row.addEventListener('click', () => togglePayloadDetail(row, items[Number(row.dataset.idx)]));
+  });
+}
+
+function togglePayloadDetail(row, ev) {
+  const next = row.nextElementSibling;
+  if (next && next.classList.contains('payload-detail')) { next.remove(); return; }
+  document.querySelectorAll('.payload-detail').forEach(n => n.remove());
+
+  const iocs = ev.iocs || {};
+  const groups = [
+    ['IP addresses', iocs.ip_addresses], ['URLs', iocs.urls],
+    ['Base64 blobs', iocs.base64_blobs], ['Monero wallets', iocs.monero_wallets],
+    ['Strings preview', iocs.strings_preview],
+  ].filter(([, v]) => v && v.length);
+
+  const detail = document.createElement('tr');
+  detail.className = 'payload-detail';
+  detail.innerHTML = `<td colspan="5">` + (groups.length
+    ? groups.map(([label, values]) => `<div class="ioc-group"><b>${label}:</b> ${values.map(v => escapeHtml(v)).join(', ')}</div>`).join('')
+    : '<i>No IOCs extracted from this payload.</i>') + `</td>`;
+  row.after(detail);
+}
+
+function setIpFilter(ip) {
+  state.ipFilter = ip;
+  document.getElementById('ip-filter-chip').hidden = false;
+  document.getElementById('ip-filter-value').textContent = ip;
+  renderFeed(0);
+}
+document.getElementById('ip-filter-clear').addEventListener('click', () => {
+  state.ipFilter = null;
+  document.getElementById('ip-filter-chip').hidden = true;
+  renderFeed(0);
+});
+document.getElementById('kind-filter').addEventListener('change', (e) => {
+  state.kindFilter = e.target.value;
+  renderFeed(0);
+});
+
+function pushEvents(events, {fresh} = {fresh: false}) {
+  if (!events.length) return;
+  state.feed = events.concat(state.feed).slice(0, FEED_CAP);
+  renderFeed(fresh ? events.length : 0);
+  renderPayloads();
+}
+
+function setStatus(text, mode) {
+  document.getElementById('status-text').textContent = text;
+  const dot = document.getElementById('status-dot');
+  dot.className = 'dot' + (mode === 'live' ? ' live' : mode === 'down' ? ' down' : '');
+}
+
+async function loadInitialFeed() {
   try {
-    const [summaryRes, eventsRes] = await Promise.all([
-      fetch('/api/summary'),
-      fetch('/api/events?limit=100'),
-    ]);
-    if (!summaryRes.ok || !eventsRes.ok) throw new Error('bad response');
-    const summary = await summaryRes.json();
-    const events = await eventsRes.json();
+    const res = await fetch('/api/events?limit=200');
+    const events = await res.json();
+    pushEvents(events, {fresh: false});
+  } catch (e) { /* SSE will still populate the feed once connected */ }
+}
 
-    renderStats(summary);
-    renderChart(summary.hourly_activity);
-    renderRanked('top-users', summary.top_usernames);
-    renderRanked('top-passwords', summary.top_passwords);
-    renderRanked('top-commands', summary.top_commands);
-    renderFeed(events);
+function connectStream() {
+  const es = new EventSource('/api/stream');
+  es.addEventListener('telemetry', (e) => {
+    try { pushEvents([JSON.parse(e.data)], {fresh: true}); } catch (err) { /* ignore malformed frame */ }
+  });
+  es.onopen = () => setStatus('live · streaming', 'live');
+  es.onerror = () => setStatus('reconnecting…', 'down');
+}
 
-    document.getElementById('status-text').textContent = 'live · updated ' + new Date().toLocaleTimeString();
+// ---------------------------------------------------------------------------
+// Session drill-down: timeline + custom asciinema-style replay (no CDN deps)
+// ---------------------------------------------------------------------------
+
+let replayState = null; // { lines: [{delay, data}], idx, timer, playing, speed }
+
+function closeModal() {
+  document.getElementById('modal-overlay').hidden = true;
+  if (replayState && replayState.timer) clearTimeout(replayState.timer);
+  replayState = null;
+}
+document.getElementById('modal-close').addEventListener('click', closeModal);
+document.getElementById('modal-overlay').addEventListener('click', (e) => {
+  if (e.target.id === 'modal-overlay') closeModal();
+});
+document.addEventListener('click', (e) => {
+  const link = e.target.closest('.session-link');
+  if (link) { e.preventDefault(); openSessionModal(link.dataset.id); }
+});
+
+async function openSessionModal(sessionId) {
+  document.getElementById('modal-overlay').hidden = false;
+  document.getElementById('modal-title').textContent = `Session ${sessionId}`;
+  document.getElementById('modal-meta').innerHTML = '<span class="empty">loading…</span>';
+  document.getElementById('modal-timeline').innerHTML = '';
+  document.getElementById('replay-screen').textContent = '';
+  document.getElementById('replay-time').textContent = '';
+
+  try {
+    const timeline = await (await fetch(`/api/session/${encodeURIComponent(sessionId)}`)).json();
+    renderModalMeta(sessionId, timeline);
+    renderModalTimeline(timeline);
   } catch (e) {
-    document.getElementById('status-text').textContent = 'connection lost — retrying…';
+    document.getElementById('modal-meta').innerHTML = '<span class="empty">failed to load session</span>';
+  }
+
+  try {
+    const castRes = await fetch(`/api/session/${encodeURIComponent(sessionId)}/cast`);
+    if (castRes.ok) {
+      const text = await castRes.text();
+      setupReplay(text);
+    } else {
+      document.getElementById('replay-screen').textContent = '(no recording available for this session)';
+    }
+  } catch (e) {
+    document.getElementById('replay-screen').textContent = '(failed to load recording)';
   }
 }
 
-refresh();
-setInterval(refresh, REFRESH_MS);
+function renderModalMeta(sessionId, timeline) {
+  const start = timeline.find(e => e.event === 'SESSION_START');
+  const end = timeline.find(e => e.event === 'SESSION_END');
+  const cred = timeline.find(e => e.event === 'CREDENTIAL_HARVEST');
+  const parts = [];
+  if (start) parts.push(`<span>IP: <b>${escapeHtml(start.ip)}:${start.port}</b></span>`);
+  if (cred) parts.push(`<span>Auth: <b>${escapeHtml(cred.username)} / ${escapeHtml(cred.password ?? '')}</b></span>`);
+  parts.push(`<span>Duration: <b>${end ? end.duration_secs.toFixed(1) + 's' : 'in progress'}</b></span>`);
+  parts.push(`<span>Commands: <b>${timeline.filter(e => e.event === 'COMMAND_RUN').length}</b></span>`);
+  document.getElementById('modal-meta').innerHTML = parts.join('');
+}
+
+function renderModalTimeline(timeline) {
+  const el = document.getElementById('modal-timeline');
+  if (!timeline.length) { el.innerHTML = '<div class="empty">no buffered events for this session (it may have scrolled out of the in-memory window)</div>'; return; }
+  el.innerHTML = timeline.map(ev => {
+    const time = new Date(ev.timestamp).toLocaleTimeString();
+    const badgeClass = 'b-' + ev.event.toLowerCase();
+    return `<div class="t-row"><span class="t-time">${escapeHtml(time)}</span><span class="badge ${badgeClass}">${escapeHtml(ev.event)}</span><span>${eventDetail(ev)}</span></div>`;
+  }).join('');
+}
+
+/// Minimal terminal-buffer emulator: interprets \r, \n and literal backspace
+/// (0x08) the way the honeypot's shell emits them, so replayed output lands
+/// in the right place without needing a full ANSI/VT100 parser.
+function makeTerminalBuffer() {
+  let lines = [''];
+  let row = 0, col = 0;
+  function write(text) {
+    for (const ch of text) {
+      if (ch === '\r') { col = 0; }
+      else if (ch === '\n') { row++; col = 0; if (lines[row] === undefined) lines[row] = ''; }
+      else if (ch === '\b' || ch === '\x08') { col = Math.max(0, col - 1); }
+      else {
+        const line = lines[row].padEnd(col, ' ').split('');
+        line[col] = ch;
+        lines[row] = line.join('');
+        col++;
+      }
+    }
+  }
+  return { write, render: () => lines.join('\n') };
+}
+
+function parseCast(text) {
+  const rawLines = text.split('\n').filter(l => l.trim());
+  if (!rawLines.length) return [];
+  // First line is the asciinema v2 header; the rest are [time, "o"|"i", data].
+  const events = [];
+  for (let i = 1; i < rawLines.length; i++) {
+    try {
+      const [time, kind, data] = JSON.parse(rawLines[i]);
+      if (kind === 'o') events.push({ time, data });
+    } catch (e) { /* skip malformed line */ }
+  }
+  return events;
+}
+
+function setupReplay(castText) {
+  const events = parseCast(castText);
+  const screen = document.getElementById('replay-screen');
+  if (!events.length) { screen.textContent = '(recording has no visual output to replay)'; return; }
+
+  replayState = { events, idx: 0, timer: null, playing: false, speed: 1, buf: makeTerminalBuffer() };
+  screen.textContent = '';
+  updateReplayTime();
+}
+
+function updateReplayTime() {
+  const rs = replayState;
+  if (!rs) return;
+  const total = rs.events.length ? rs.events[rs.events.length - 1].time : 0;
+  const cur = rs.idx > 0 ? rs.events[rs.idx - 1].time : 0;
+  document.getElementById('replay-time').textContent = `${cur.toFixed(1)}s / ${total.toFixed(1)}s`;
+}
+
+function stepReplay() {
+  const rs = replayState;
+  if (!rs || rs.idx >= rs.events.length) { pauseReplay(); return; }
+  const ev = rs.events[rs.idx];
+  rs.buf.write(ev.data);
+  document.getElementById('replay-screen').textContent = rs.buf.render();
+  document.getElementById('replay-screen').scrollTop = 1e9;
+  updateReplayTime();
+
+  const next = rs.events[rs.idx + 1];
+  rs.idx++;
+  if (!next) { pauseReplay(); return; }
+  const delayMs = Math.max(0, (next.time - ev.time) * 1000 / rs.speed);
+  rs.timer = setTimeout(stepReplay, Math.min(delayMs, 2000)); // cap so a long idle gap doesn't stall playback for minutes
+}
+
+function playReplay() {
+  if (!replayState) return;
+  replayState.playing = true;
+  document.getElementById('replay-playpause').textContent = '⏸ Pause';
+  stepReplay();
+}
+function pauseReplay() {
+  if (!replayState) return;
+  replayState.playing = false;
+  if (replayState.timer) clearTimeout(replayState.timer);
+  document.getElementById('replay-playpause').textContent = '▶ Play';
+}
+document.getElementById('replay-playpause').addEventListener('click', () => {
+  if (!replayState) return;
+  replayState.playing ? pauseReplay() : playReplay();
+});
+document.getElementById('replay-speed').addEventListener('click', (e) => {
+  if (!replayState) return;
+  const speeds = [1, 2, 4, 8];
+  const next = speeds[(speeds.indexOf(replayState.speed) + 1) % speeds.length];
+  replayState.speed = next;
+  e.target.textContent = next + '×';
+});
+document.getElementById('replay-restart').addEventListener('click', () => {
+  if (!replayState) return;
+  pauseReplay();
+  replayState.idx = 0;
+  replayState.buf = makeTerminalBuffer();
+  document.getElementById('replay-screen').textContent = '';
+  updateReplayTime();
+});
+
+// ---------------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------------
+
+loadInitialFeed().then(connectStream);
+refreshSummary();
+setInterval(refreshSummary, 4000);
 </script>
 </body>
 </html>

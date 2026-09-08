@@ -396,13 +396,16 @@ impl Handler for ActiveSession {
                     if !self.cmd_buffer.is_empty() {
                         self.cmd_buffer.pop();
                         session.data(channel, russh::CryptoVec::from(b"\x08 \x08".to_vec()));
+                        // Recorded as visual output (what the terminal actually showed),
+                        // not input, so session replay renders the correction faithfully.
+                        let _ = self.recorder.record_output("\x08 \x08").await;
                     }
                 }
 
                 0x03 => {
                     self.last_byte = byte;
                     self.cmd_buffer.clear();
-                    session.data(channel, russh::CryptoVec::from(b"^C\r\n".to_vec()));
+                    self.send_output(channel, "^C\r\n", session).await;
                     let prompt = self.get_prompt();
                     self.send_output(channel, &prompt, session).await;
                 }
@@ -410,7 +413,7 @@ impl Handler for ActiveSession {
                 0x04 => {
                     self.last_byte = byte;
                     if self.cmd_buffer.is_empty() {
-                        session.data(channel, russh::CryptoVec::from(b"logout\r\n".to_vec()));
+                        self.send_output(channel, "logout\r\n", session).await;
                         session.close(channel);
                         self.teardown_session().await;
                     }
@@ -420,8 +423,10 @@ impl Handler for ActiveSession {
                     self.last_byte = byte;
                     let ch = char::from(byte);
                     self.cmd_buffer.push(ch);
-                    let _ = self.recorder.record_input(&ch.to_string()).await;
                     session.data(channel, russh::CryptoVec::from(vec![byte]));
+                    // Echoed character is what appears on the attacker's screen, so it
+                    // belongs in the "o" (visual) stream for faithful session replay.
+                    let _ = self.recorder.record_output(&ch.to_string()).await;
                 }
 
                 _ => { self.last_byte = byte; }
