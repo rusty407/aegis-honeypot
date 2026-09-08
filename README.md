@@ -1,7 +1,3 @@
-
-
-https://github.com/user-attachments/assets/c454fc4f-02f5-4c42-9eec-d8e6ebba01f6
-
 <div align="center">
 
 # 🛡️ AEGIS HONEYPOT
@@ -28,15 +24,11 @@ https://github.com/user-attachments/assets/c454fc4f-02f5-4c42-9eec-d8e6ebba01f6
 
 ---
 
-https://github.com/user-attachments/assets/392aacb4-efa9-464d-b653-206380671a88
-
-
-
 ## 🎬 Demo
 
-[![Aegis Honeypot demo — live dashboard, session replay, and IOC extraction](media/demo-thumbnail.jpg)](media/aegis-demo.mp4)
+https://github.com/user-attachments/assets/392aacb4-efa9-464d-b653-206380671a88
 
-*Click to watch: an attacker SSHes in, drops a payload, and gets quarantined & fingerprinted in real time — the dashboard updates live over Server-Sent Events, then replays the attacker's exact terminal session in-browser.*
+*An attacker SSHes in, drops a payload, and gets quarantined & fingerprinted in real time — the dashboard updates live over Server-Sent Events, then replays the attacker's exact terminal session in-browser.*
 
 ---
 
