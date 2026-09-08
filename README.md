@@ -11,6 +11,7 @@
 [![eBPF](https://img.shields.io/badge/telemetry-eBPF%20%2B%20OverlayFS-purple.svg?style=flat-square)](https://ebpf.io/)
 
 <p align="center">
+  <a href="#-demo">Demo</a> •
   <a href="#-key-features">Key Features</a> •
   <a href="#-architecture">Architecture</a> •
   <a href="#-quick-start">Quick Start</a> •
@@ -20,6 +21,14 @@
 </p>
 
 </div>
+
+---
+
+## 🎬 Demo
+
+[![Aegis Honeypot demo — live dashboard, session replay, and IOC extraction](media/demo-thumbnail.jpg)](media/aegis-demo.mp4)
+
+*Click to watch: an attacker SSHes in, drops a payload, and gets quarantined & fingerprinted in real time — the dashboard updates live over Server-Sent Events, then replays the attacker's exact terminal session in-browser.*
 
 ---
 
