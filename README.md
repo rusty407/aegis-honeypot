@@ -181,8 +181,10 @@ When an attacker drops a dropper script, downloads a payload via `wget`/`curl`, 
 [gateway]
 bind_addr = "0.0.0.0"
 port = 2222
-max_sessions = 256
-# host_key_path = "/etc/aegis/host_key.pem"  # Optional: defaults to ephemeral Ed25519
+max_sessions = 256                 # Global concurrent-session cap (enforced via a semaphore)
+max_sessions_per_ip = 8            # Concurrent-session cap per source IP (0 disables)
+max_connects_per_min_per_ip = 20   # New connections per IP per rolling 60s window (0 disables)
+host_key_path = "./host_key.pem"   # Persisted & auto-generated on first run. Remove to use an ephemeral key.
 
 [vmm]
 rootfs_path = "./rootfs"
@@ -200,6 +202,10 @@ string_min_len = 6
 level = "info"
 json = false
 ```
+
+**Why a persistent host key matters:** a returning attacker (or a scanner like Shodan/Censys) that sees a *different* SSH host key on every connection has effectively fingerprinted you as a honeypot that restarts per-session. `host_key_path` is generated once and reused across restarts; omit it only if you specifically want a fresh ephemeral key every run.
+
+**Why per-IP admission control matters:** `max_sessions` alone caps total load, but a single botnet host can still fill the entire pool. `max_sessions_per_ip` and `max_connects_per_min_per_ip` bound both concurrency and reconnect rate per source IP before a sandbox or session recorder is ever provisioned for it.
 
 ---
 
@@ -235,7 +241,8 @@ docker run -d \
 
 - **Safe Quarantine:** Quarantined binaries are written with permissions `0600` (read/write only by the honeypot user, execution strictly prohibited).
 - **SSRF Shield:** In-flight payload downloads to RFC 1918 private IP ranges, loopback (`127.0.0.0/8`), and link-local addresses are rejected to prevent internal network scanning.
-- **Resource Protection:** Tokio rate-limits and concurrency limits prevent memory exhaustion under automated botnet brute-force attacks.
+- **Resource Protection:** A global `tokio::sync::Semaphore` caps total concurrent sessions at `max_sessions`; a per-IP admission guard additionally caps concurrent sessions and connection rate per source IP (`max_sessions_per_ip`, `max_connects_per_min_per_ip`), rejecting excess connections before a sandbox or recorder is provisioned for them.
+- **Persistent Host Key:** The SSH host key is generated once and reused across restarts (`host_key_path`), avoiding the fingerprintable tell of a host key that changes on every reconnect.
 
 ---
 

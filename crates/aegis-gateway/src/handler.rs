@@ -22,11 +22,13 @@ use russh::server::{Auth, Handler, Msg, Server, Session};
 use russh::{Channel, ChannelId};
 use russh_keys::key::KeyPair;
 use sha2::{Digest, Sha256};
-use std::net::SocketAddr;
+use std::collections::{HashMap, VecDeque};
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
-use std::time::Instant;
-use tracing::info;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::time::{Duration, Instant};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tracing::{info, warn};
 
 // ---------------------------------------------------------------------------
 // SSRF Guard & Payload Interception
@@ -80,6 +82,73 @@ use crate::vfs::VirtualFileSystem;
 use crate::shell::dispatch;
 
 // ---------------------------------------------------------------------------
+// Connection Admission Control (global cap + per-IP concurrency/rate limits)
+// ---------------------------------------------------------------------------
+
+struct IpEntry {
+    active: u32,
+    recent_connects: VecDeque<Instant>,
+}
+
+/// Tracks concurrent sessions and connection rate per source IP so a single
+/// botnet host can't monopolize the global session pool or hammer the
+/// listener with reconnects. Cheap, lock-guarded, non-blocking — never held
+/// across an `.await`.
+pub struct IpConnectionGuard {
+    max_per_ip: u32,
+    max_per_minute: u32,
+    entries: StdMutex<HashMap<IpAddr, IpEntry>>,
+}
+
+impl IpConnectionGuard {
+    pub fn new(max_per_ip: u32, max_per_minute: u32) -> Self {
+        Self {
+            max_per_ip,
+            max_per_minute,
+            entries: StdMutex::new(HashMap::new()),
+        }
+    }
+
+    /// Attempt to admit a new connection from `ip`. On success the caller
+    /// takes ownership of one admitted "slot" and must call `release(ip)`
+    /// exactly once when the connection ends (or admission is abandoned).
+    fn try_admit(&self, ip: IpAddr) -> bool {
+        let mut map = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = map.entry(ip).or_insert_with(|| IpEntry {
+            active: 0,
+            recent_connects: VecDeque::new(),
+        });
+
+        let now = Instant::now();
+        while matches!(entry.recent_connects.front(), Some(t) if now.duration_since(*t) > Duration::from_secs(60))
+        {
+            entry.recent_connects.pop_front();
+        }
+
+        if self.max_per_ip > 0 && entry.active >= self.max_per_ip {
+            return false;
+        }
+        if self.max_per_minute > 0 && entry.recent_connects.len() as u32 >= self.max_per_minute {
+            return false;
+        }
+
+        entry.active += 1;
+        entry.recent_connects.push_back(now);
+        true
+    }
+
+    fn release(&self, ip: IpAddr) {
+        let mut map = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = map.get_mut(&ip) {
+            entry.active = entry.active.saturating_sub(1);
+            if entry.active == 0 && entry.recent_connects.is_empty() {
+                map.remove(&ip);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Shared Server State
 // ---------------------------------------------------------------------------
 
@@ -88,13 +157,17 @@ pub struct AegisServer {
     pub config: Arc<AegisConfig>,
     pub event_tx: EventSender,
     pub forensics: Arc<ForensicsEngine>,
+    pub session_semaphore: Arc<Semaphore>,
+    pub ip_guard: Arc<IpConnectionGuard>,
 }
 
 // ---------------------------------------------------------------------------
 // Per-Connection Handler
 // ---------------------------------------------------------------------------
 
-pub struct SessionHandler {
+/// A fully provisioned, admitted session: sandbox, VFS, recorder, and the
+/// admission-control handles it must release on drop.
+pub struct ActiveSession {
     meta: SessionMeta,
     session_start: Instant,
     vfs: VirtualFileSystem,
@@ -107,9 +180,19 @@ pub struct SessionHandler {
     forensics: Arc<ForensicsEngine>,
     sandbox: Option<SandboxHandle>,
     is_ended: bool,
+    /// Held for the lifetime of the session; releases the global session
+    /// slot back to the pool when the handler is dropped.
+    _permit: OwnedSemaphorePermit,
+    ip_guard: Arc<IpConnectionGuard>,
 }
 
-impl SessionHandler {
+impl Drop for ActiveSession {
+    fn drop(&mut self) {
+        self.ip_guard.release(self.meta.client_ip);
+    }
+}
+
+impl ActiveSession {
     async fn send_output(&mut self, channel: ChannelId, data: &str, session: &mut Session) {
         session.data(channel, russh::CryptoVec::from(data.as_bytes().to_vec()));
         let _ = self.recorder.record_output(data).await;
@@ -159,7 +242,7 @@ impl SessionHandler {
 }
 
 #[async_trait]
-impl Handler for SessionHandler {
+impl Handler for ActiveSession {
     type Error = russh::Error;
 
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
@@ -354,6 +437,73 @@ impl Handler for SessionHandler {
 }
 
 // ---------------------------------------------------------------------------
+// Public Handler Facade — admits a real ActiveSession, or a Rejected stub
+// for connections turned away by admission control (see `new_client` below).
+// The `Rejected` arm relies entirely on `Handler`'s built-in defaults, which
+// already reject every auth method and refuse every channel — so it needs
+// no method bodies beyond `type Error`.
+// ---------------------------------------------------------------------------
+
+pub enum SessionHandler {
+    Active(Box<ActiveSession>),
+    Rejected,
+}
+
+#[async_trait]
+impl Handler for SessionHandler {
+    type Error = russh::Error;
+
+    async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
+        match self {
+            Self::Active(s) => s.auth_password(user, password).await,
+            Self::Rejected => Ok(Auth::Reject { proceed_with_methods: None }),
+        }
+    }
+
+    async fn auth_publickey(&mut self, user: &str, public_key: &russh_keys::key::PublicKey) -> Result<Auth, Self::Error> {
+        match self {
+            Self::Active(s) => s.auth_publickey(user, public_key).await,
+            Self::Rejected => Ok(Auth::Reject { proceed_with_methods: None }),
+        }
+    }
+
+    async fn channel_open_session(&mut self, channel: Channel<Msg>, session: &mut Session) -> Result<bool, Self::Error> {
+        match self {
+            Self::Active(s) => s.channel_open_session(channel, session).await,
+            Self::Rejected => Ok(false),
+        }
+    }
+
+    async fn pty_request(&mut self, channel: ChannelId, term: &str, col_width: u32, row_height: u32, pix_width: u32, pix_height: u32, modes: &[(russh::Pty, u32)], session: &mut Session) -> Result<(), Self::Error> {
+        match self {
+            Self::Active(s) => s.pty_request(channel, term, col_width, row_height, pix_width, pix_height, modes, session).await,
+            Self::Rejected => Ok(()),
+        }
+    }
+
+    async fn shell_request(&mut self, channel: ChannelId, session: &mut Session) -> Result<(), Self::Error> {
+        match self {
+            Self::Active(s) => s.shell_request(channel, session).await,
+            Self::Rejected => Ok(()),
+        }
+    }
+
+    async fn data(&mut self, channel: ChannelId, data: &[u8], session: &mut Session) -> Result<(), Self::Error> {
+        match self {
+            Self::Active(s) => s.data(channel, data, session).await,
+            Self::Rejected => Ok(()),
+        }
+    }
+
+    async fn channel_close(&mut self, channel: ChannelId, session: &mut Session) -> Result<(), Self::Error> {
+        match self {
+            Self::Active(s) => s.channel_close(channel, session).await,
+            Self::Rejected => Ok(()),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Blocking payload fetch
 // ---------------------------------------------------------------------------
 
@@ -430,7 +580,31 @@ impl Server for AegisServer {
 
     fn new_client(&mut self, peer_addr: Option<SocketAddr>) -> Self::Handler {
         let addr = peer_addr.unwrap_or_else(|| "0.0.0.0:0".parse().unwrap());
-        let meta = SessionMeta::new(addr.ip(), addr.port());
+        let ip = addr.ip();
+
+        // Admission control: per-IP concurrency/rate limit first (cheap, avoids
+        // spinning up a sandbox+recorder for connections we're about to drop),
+        // then the global concurrent-session cap.
+        if !self.ip_guard.try_admit(ip) {
+            warn!(
+                "Rejecting connection from {ip}: per-IP session/rate limit exceeded (max {}/ip, {}/min)",
+                self.config.gateway.max_sessions_per_ip, self.config.gateway.max_connects_per_min_per_ip
+            );
+            return SessionHandler::Rejected;
+        }
+        let permit = match self.session_semaphore.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                warn!(
+                    "Rejecting connection from {ip}: global session limit reached ({})",
+                    self.config.gateway.max_sessions
+                );
+                self.ip_guard.release(ip);
+                return SessionHandler::Rejected;
+            }
+        };
+
+        let meta = SessionMeta::new(ip, addr.port());
         let session_id = meta.session_id.clone();
         info!("New client: {} -> {}", addr, session_id);
 
@@ -458,7 +632,7 @@ impl Server for AegisServer {
         let lower_root = Some(PathBuf::from(&self.config.vmm.rootfs_path));
         let vfs = VirtualFileSystem::with_roots(mount_root, lower_root);
 
-        SessionHandler {
+        SessionHandler::Active(Box::new(ActiveSession {
             meta,
             session_start: Instant::now(),
             vfs,
@@ -471,7 +645,9 @@ impl Server for AegisServer {
             forensics: self.forensics.clone(),
             sandbox,
             is_ended: false,
-        }
+            _permit: permit,
+            ip_guard: self.ip_guard.clone(),
+        }))
     }
 }
 
@@ -482,5 +658,63 @@ pub fn build_russh_config(keypair: KeyPair) -> russh::server::Config {
         auth_rejection_time_initial: Some(std::time::Duration::from_millis(200)),
         keys: vec![keypair],
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::IpConnectionGuard;
+
+    fn ip(n: u8) -> std::net::IpAddr {
+        std::net::IpAddr::V4(std::net::Ipv4Addr::new(198, 51, 100, n))
+    }
+
+    #[test]
+    fn admits_up_to_per_ip_concurrency_cap() {
+        let guard = IpConnectionGuard::new(2, 0);
+        let a = ip(1);
+        assert!(guard.try_admit(a));
+        assert!(guard.try_admit(a));
+        assert!(!guard.try_admit(a), "third concurrent session from the same IP must be rejected");
+
+        guard.release(a);
+        assert!(guard.try_admit(a), "releasing a slot should free capacity again");
+    }
+
+    #[test]
+    fn per_ip_cap_does_not_affect_other_ips() {
+        let guard = IpConnectionGuard::new(1, 0);
+        let a = ip(1);
+        let b = ip(2);
+        assert!(guard.try_admit(a));
+        assert!(!guard.try_admit(a));
+        assert!(guard.try_admit(b), "a different source IP must have its own budget");
+    }
+
+    #[test]
+    fn enforces_connect_rate_limit() {
+        let guard = IpConnectionGuard::new(0, 3);
+        let a = ip(1);
+        assert!(guard.try_admit(a));
+        assert!(guard.try_admit(a));
+        assert!(guard.try_admit(a));
+        assert!(!guard.try_admit(a), "a 4th connect within the same window must be rejected");
+    }
+
+    #[test]
+    fn zero_means_unlimited() {
+        let guard = IpConnectionGuard::new(0, 0);
+        let a = ip(1);
+        for _ in 0..50 {
+            assert!(guard.try_admit(a));
+        }
+    }
+
+    #[test]
+    fn release_is_idempotent_safe_on_unknown_ip() {
+        // Releasing an IP that was never admitted (e.g. a defensive double-release)
+        // must not panic.
+        let guard = IpConnectionGuard::new(1, 0);
+        guard.release(ip(9));
     }
 }

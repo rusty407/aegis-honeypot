@@ -284,8 +284,26 @@ pub struct AegisConfig {
 pub struct GatewayConfig {
     pub bind_addr: String,
     pub port: u16,
+    /// Hard cap on total concurrent SSH sessions across all clients.
     pub max_sessions: usize,
+    /// Hard cap on concurrent SSH sessions from a single source IP. `0` disables the check.
+    #[serde(default = "default_max_sessions_per_ip")]
+    pub max_sessions_per_ip: u32,
+    /// Max new connections accepted from a single source IP per rolling 60s window. `0` disables the check.
+    #[serde(default = "default_max_connects_per_min_per_ip")]
+    pub max_connects_per_min_per_ip: u32,
+    /// Path to a persistent Ed25519 host key (PEM). Generated on first run if missing.
+    /// Leave unset for an ephemeral key regenerated on every restart (not recommended —
+    /// a host key that changes across reconnects is a fingerprintable honeypot tell).
     pub host_key_path: Option<String>,
+}
+
+fn default_max_sessions_per_ip() -> u32 {
+    8
+}
+
+fn default_max_connects_per_min_per_ip() -> u32 {
+    20
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -317,7 +335,9 @@ impl Default for AegisConfig {
                 bind_addr: "0.0.0.0".into(),
                 port: 2222,
                 max_sessions: 256,
-                host_key_path: None,
+                max_sessions_per_ip: default_max_sessions_per_ip(),
+                max_connects_per_min_per_ip: default_max_connects_per_min_per_ip(),
+                host_key_path: Some("./host_key.pem".into()),
             },
             vmm: VmmConfig {
                 rootfs_path: "./rootfs".into(),

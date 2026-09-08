@@ -3,8 +3,10 @@
 [gateway]
 bind_addr    = "0.0.0.0"
 port         = 2222
-max_sessions = 512
-host_key_path = "./host_key.pem"   # Remove to use ephemeral key
+max_sessions = 512                 # Global concurrent-session cap
+max_sessions_per_ip = 8            # Concurrent-session cap per source IP (0 disables)
+max_connects_per_min_per_ip = 20   # New connections per IP per rolling 60s window (0 disables)
+host_key_path = "./host_key.pem"   # Persisted & auto-generated on first run. Remove to use an ephemeral key.
 
 [vmm]
 rootfs_path     = "./rootfs"          # Unused in Option A (fake shell)
