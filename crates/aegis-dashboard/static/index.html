@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aegis — Live Threat Feed</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #121821;
+    --panel-border: #1f2937;
+    --text: #d7e1ea;
+    --muted: #7c8b9a;
+    --accent: #3ddc97;
+    --accent-dim: #1f5c44;
+    --warn: #f0b429;
+    --danger: #ef5350;
+    --mono: "SF Mono", "Fira Code", ui-monospace, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  header h1 {
+    font-size: 16px;
+    margin: 0;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+  }
+  header .sub { color: var(--muted); font-size: 12px; }
+  #status { margin-left: auto; font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  #status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 6px var(--accent); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+  main { padding: 20px 24px 40px; max-width: 1280px; margin: 0 auto; }
+
+  .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px; }
+  .stat { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 6px; padding: 14px 16px; }
+  .stat .value { font-size: 24px; font-weight: 600; color: var(--accent); }
+  .stat .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 4px; }
+
+  .grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } .stats { grid-template-columns: repeat(2, 1fr); } }
+
+  .panel { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 6px; padding: 16px; margin-bottom: 16px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+
+  .chart { display: flex; align-items: flex-end; gap: 3px; height: 90px; }
+  .chart .bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+  .chart .bar { width: 100%; background: linear-gradient(180deg, var(--accent), var(--accent-dim)); border-radius: 2px 2px 0 0; min-height: 2px; }
+  .chart .bar-label { font-size: 9px; color: var(--muted); margin-top: 4px; white-space: nowrap; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--panel-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; }
+  td.count { color: var(--accent); text-align: right; font-variant-numeric: tabular-nums; }
+  .rank-tables { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  @media (max-width: 700px) { .rank-tables { grid-template-columns: 1fr; } }
+
+  .feed { max-height: 560px; overflow-y: auto; }
+  .feed table td:last-child { white-space: normal; word-break: break-word; }
+  .badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; letter-spacing: 0.03em; }
+  .b-session_start, .b-session_end { background: #1e3a5f; color: #7db8f5; }
+  .b-credential_harvest { background: #4a3a12; color: var(--warn); }
+  .b-command_run { background: #123a2e; color: var(--accent); }
+  .b-payload_captured { background: #4a1414; color: var(--danger); }
+  .b-syscall_execve, .b-syscall_connect, .b-syscall_memfd_create { background: #2a1a4a; color: #b892f0; }
+  .ip { color: var(--muted); }
+  .empty { color: var(--muted); font-style: italic; padding: 12px 0; }
+  footer { text-align: center; color: var(--panel-border); font-size: 11px; padding: 24px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>&#128737; AEGIS</h1>
+  <span class="sub">live threat feed</span>
+  <div id="status"><span class="dot"></span><span id="status-text">connecting…</span></div>
+</header>
+
+<main>
+  <div class="stats" id="stats"></div>
+
+  <div class="panel">
+    <h2>Activity — last 24h</h2>
+    <div class="chart" id="chart"></div>
+  </div>
+
+  <div class="grid">
+    <div class="panel feed">
+      <h2>Live Feed</h2>
+      <table>
+        <thead><tr><th style="width:70px">Time</th><th style="width:110px">Source IP</th><th style="width:150px">Event</th><th>Detail</th></tr></thead>
+        <tbody id="feed-body"><tr><td colspan="4" class="empty">waiting for events…</td></tr></tbody>
+      </table>
+    </div>
+
+    <div>
+      <div class="panel">
+        <h2>Top Credentials &amp; Commands</h2>
+        <div class="rank-tables">
+          <div><table><thead><tr><th>Username</th><th></th></tr></thead><tbody id="top-users"></tbody></table></div>
+          <div><table><thead><tr><th>Password</th><th></th></tr></thead><tbody id="top-passwords"></tbody></table></div>
+          <div><table><thead><tr><th>Command</th><th></th></tr></thead><tbody id="top-commands"></tbody></table></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>aegis-dashboard · reads attacks.json only · no credentials or payload contents leave this page</footer>
+
+<script>
+const REFRESH_MS = 4000;
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function fmtStat(n) {
+  return new Intl.NumberFormat().format(n);
+}
+
+function renderStats(s) {
+  const cards = [
+    ['Sessions', s.total_sessions],
+    ['Commands', s.total_commands],
+    ['Credentials', s.total_credentials],
+    ['Payloads', s.total_payloads],
+    ['Unique IPs', s.unique_ips],
+  ];
+  document.getElementById('stats').innerHTML = cards.map(([label, value]) =>
+    `<div class="stat"><div class="value">${fmtStat(value)}</div><div class="label">${label}</div></div>`
+  ).join('');
+}
+
+function renderChart(buckets) {
+  const el = document.getElementById('chart');
+  if (!buckets.length) { el.innerHTML = '<div class="empty">no activity yet</div>'; return; }
+  const max = Math.max(1, ...buckets.map(b => b.count));
+  el.innerHTML = buckets.map(b => {
+    const pct = Math.max(2, Math.round((b.count / max) * 100));
+    const hour = new Date(b.hour).toLocaleTimeString([], { hour: '2-digit' });
+    return `<div class="bar-wrap" title="${b.count} events at ${escapeHtml(hour)}">
+      <div class="bar" style="height:${pct}%"></div>
+      <div class="bar-label">${escapeHtml(hour)}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderRanked(elId, items, label) {
+  const el = document.getElementById(elId);
+  if (!items.length) { el.innerHTML = `<tr><td colspan="2" class="empty">none yet</td></tr>`; return; }
+  el.innerHTML = items.map(r =>
+    `<tr><td title="${escapeHtml(r.value)}">${escapeHtml(r.value) || '<i>(empty)</i>'}</td><td class="count">${r.count}</td></tr>`
+  ).join('');
+}
+
+function eventDetail(ev) {
+  switch (ev.event) {
+    case 'SESSION_START': return `session ${escapeHtml(ev.session_id)} opened on port ${ev.port}`;
+    case 'SESSION_END': return `session ${escapeHtml(ev.session_id)} closed after ${ev.duration_secs.toFixed(1)}s`;
+    case 'CREDENTIAL_HARVEST': return `<b>${escapeHtml(ev.username)}</b> / <b>${escapeHtml(ev.password ?? '')}</b> (${ev.auth_method})`;
+    case 'COMMAND_RUN': return `<code>${escapeHtml(ev.command)}</code>`;
+    case 'PAYLOAD_CAPTURED': return `${escapeHtml(ev.sha256.slice(0, 16))}… (${ev.size_bytes}B) from ${escapeHtml(ev.source_url ?? 'unknown')}`;
+    case 'SYSCALL_EXECVE': return `pid ${ev.pid}: ${escapeHtml(ev.filename)} ${escapeHtml(ev.argv.join(' '))}`;
+    case 'SYSCALL_CONNECT': return `pid ${ev.pid} &rarr; ${escapeHtml(ev.dest_ip)}:${ev.dest_port}`;
+    case 'SYSCALL_MEMFD_CREATE': return `pid ${ev.pid} created fileless memfd '${escapeHtml(ev.name)}'`;
+    default: return '';
+  }
+}
+
+function renderFeed(events) {
+  const el = document.getElementById('feed-body');
+  if (!events.length) { el.innerHTML = '<tr><td colspan="4" class="empty">waiting for events…</td></tr>'; return; }
+  el.innerHTML = events.map(ev => {
+    const badgeClass = 'b-' + ev.event.toLowerCase();
+    const time = new Date(ev.timestamp).toLocaleTimeString();
+    return `<tr>
+      <td>${escapeHtml(time)}</td>
+      <td class="ip">${escapeHtml(ev.ip)}</td>
+      <td><span class="badge ${badgeClass}">${escapeHtml(ev.event)}</span></td>
+      <td>${eventDetail(ev)}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function refresh() {
+  try {
+    const [summaryRes, eventsRes] = await Promise.all([
+      fetch('/api/summary'),
+      fetch('/api/events?limit=100'),
+    ]);
+    if (!summaryRes.ok || !eventsRes.ok) throw new Error('bad response');
+    const summary = await summaryRes.json();
+    const events = await eventsRes.json();
+
+    renderStats(summary);
+    renderChart(summary.hourly_activity);
+    renderRanked('top-users', summary.top_usernames);
+    renderRanked('top-passwords', summary.top_passwords);
+    renderRanked('top-commands', summary.top_commands);
+    renderFeed(events);
+
+    document.getElementById('status-text').textContent = 'live · updated ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    document.getElementById('status-text').textContent = 'connection lost — retrying…';
+  }
+}
+
+refresh();
+setInterval(refresh, REFRESH_MS);
+</script>
+</body>
+</html>

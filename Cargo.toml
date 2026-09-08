@@ -7,6 +7,7 @@ members = [
     "crates/aegis-collector",
     "crates/aegis-forensics",
     "crates/aegis-ebpf",
+    "crates/aegis-dashboard",
 ]
 
 [workspace.package]
@@ -39,6 +40,7 @@ bytes              = "1"
 nix                = { version = "0.29", features = ["process","mount","sched","resource","signal","user","fs","term"] }
 libc               = "0.2"
 async-trait        = "0.1"
+axum               = "0.7"
 
 [profile.release]
 opt-level = 3

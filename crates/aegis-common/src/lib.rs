@@ -278,6 +278,24 @@ pub struct AegisConfig {
     pub vmm: VmmConfig,
     pub forensics: ForensicsConfig,
     pub logging: LoggingConfig,
+    /// The `aegis-dashboard` binary is a separate, unprivileged process; it
+    /// reads this same config purely for `bind`/`port` plus the `forensics`
+    /// paths above (it tails `attacks_log` and reports on `quarantine_dir`).
+    #[serde(default = "default_dashboard_config")]
+    pub dashboard: DashboardConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardConfig {
+    pub bind_addr: String,
+    pub port: u16,
+}
+
+fn default_dashboard_config() -> DashboardConfig {
+    DashboardConfig {
+        bind_addr: "127.0.0.1".into(),
+        port: 8080,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -355,6 +373,7 @@ impl Default for AegisConfig {
                 level: "info".into(),
                 json: false,
             },
+            dashboard: default_dashboard_config(),
         }
     }
 }
