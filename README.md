@@ -1,3 +1,7 @@
+
+
+https://github.com/user-attachments/assets/c454fc4f-02f5-4c42-9eec-d8e6ebba01f6
+
 <div align="center">
 
 # 🛡️ AEGIS HONEYPOT
@@ -23,6 +27,10 @@
 </div>
 
 ---
+
+https://github.com/user-attachments/assets/392aacb4-efa9-464d-b653-206380671a88
+
+
 
 ## 🎬 Demo
 
