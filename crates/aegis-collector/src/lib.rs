@@ -155,6 +155,7 @@ impl SessionRecorder {
         let mut header_str = header.to_string();
         header_str.push('\n');
         writer.write_all(header_str.as_bytes()).await?;
+        writer.flush().await?;
 
         info!("Session recorder opened -> {}", path.display());
         Ok(Self { session_id, writer, start_ts: std::time::Instant::now() })
@@ -165,10 +166,16 @@ impl SessionRecorder {
         d.as_secs() as f64 + d.subsec_micros() as f64 / 1_000_000.0
     }
 
+    /// `tokio::io::BufWriter` — unlike `std`'s — does not flush on drop, so
+    /// every write here flushes immediately. Without it, a session that
+    /// never reaches a clean `close()` (dropped connection, network blip,
+    /// killed client) would lose everything buffered and leave behind a
+    /// `.cast` file with no visual output at all to replay.
     pub async fn record_output(&mut self, data: &str) -> AegisResult<()> {
         let mut s = serde_json::json!([self.elapsed(), "o", data]).to_string();
         s.push('\n');
         self.writer.write_all(s.as_bytes()).await?;
+        self.writer.flush().await?;
         Ok(())
     }
 
@@ -176,6 +183,7 @@ impl SessionRecorder {
         let mut s = serde_json::json!([self.elapsed(), "i", data]).to_string();
         s.push('\n');
         self.writer.write_all(s.as_bytes()).await?;
+        self.writer.flush().await?;
         Ok(())
     }
 

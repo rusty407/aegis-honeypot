@@ -37,11 +37,13 @@
   ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
   body {
     margin: 0;
+    /* A static gradient baked at a fixed size, not `background-attachment:
+       fixed` — that forces a repaint of the whole gradient on every scroll
+       frame, which is a real jank source on weaker/integrated GPUs. */
     background:
       radial-gradient(1100px 560px at 12% -8%, rgba(52,211,153,0.055), transparent 60%),
       radial-gradient(900px 480px at 100% 0%, rgba(111,168,245,0.045), transparent 55%),
       var(--bg);
-    background-attachment: fixed;
     color: var(--text);
     font-family: var(--sans);
     font-size: 13.5px;
@@ -58,9 +60,11 @@
     border-bottom: 1px solid var(--border);
     position: sticky;
     top: 0;
-    background: rgba(10,13,18,0.72);
-    backdrop-filter: blur(12px) saturate(140%);
-    -webkit-backdrop-filter: blur(12px) saturate(140%);
+    /* Solid, not blurred: backdrop-filter forces the compositor to
+       recompute the header's backdrop on every repaint of the content
+       scrolling under it — expensive on integrated GPUs / some Wayland
+       compositors, and this page repaints often (live feed). */
+    background: #0c0f14;
     z-index: 5;
   }
   header .brand { display: flex; align-items: center; gap: 10px; }
@@ -174,7 +178,7 @@
 
   /* Session drill-down modal */
   .modal-overlay {
-    position: fixed; inset: 0; background: rgba(5,7,10,0.72); backdrop-filter: blur(3px);
+    position: fixed; inset: 0; background: rgba(5,7,10,0.82);
     display: flex; align-items: flex-start; justify-content: center;
     padding: 40px 20px; z-index: 100; overflow-y: auto;
   }
@@ -495,11 +499,28 @@ document.getElementById('kind-filter').addEventListener('change', (e) => {
   renderFeed(0);
 });
 
+// A burst of SSE events (many commands in quick succession, several sessions
+// opening at once) used to trigger a full feed/payload re-render per event —
+// fine for one event a second, visibly janky under a burst. Coalesce any
+// number of pushEvents() calls landing in the same animation frame into one
+// render instead; normal (sparse) traffic still renders within ~16ms, so it
+// reads as instant either way.
+let renderScheduled = false;
+let pendingFreshCount = 0;
+
 function pushEvents(events, {fresh} = {fresh: false}) {
   if (!events.length) return;
   state.feed = events.concat(state.feed).slice(0, FEED_CAP);
-  renderFeed(fresh ? events.length : 0);
-  renderPayloads();
+  if (fresh) pendingFreshCount += events.length;
+  if (renderScheduled) return;
+  renderScheduled = true;
+  requestAnimationFrame(() => {
+    renderScheduled = false;
+    const freshCount = pendingFreshCount;
+    pendingFreshCount = 0;
+    renderFeed(freshCount);
+    renderPayloads();
+  });
 }
 
 function setStatus(text, mode) {
