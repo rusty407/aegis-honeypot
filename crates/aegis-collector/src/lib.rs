@@ -166,16 +166,10 @@ impl SessionRecorder {
         d.as_secs() as f64 + d.subsec_micros() as f64 / 1_000_000.0
     }
 
-    /// `tokio::io::BufWriter` — unlike `std`'s — does not flush on drop, so
-    /// every write here flushes immediately. Without it, a session that
-    /// never reaches a clean `close()` (dropped connection, network blip,
-    /// killed client) would lose everything buffered and leave behind a
-    /// `.cast` file with no visual output at all to replay.
     pub async fn record_output(&mut self, data: &str) -> AegisResult<()> {
         let mut s = serde_json::json!([self.elapsed(), "o", data]).to_string();
         s.push('\n');
         self.writer.write_all(s.as_bytes()).await?;
-        self.writer.flush().await?;
         Ok(())
     }
 
@@ -183,6 +177,20 @@ impl SessionRecorder {
         let mut s = serde_json::json!([self.elapsed(), "i", data]).to_string();
         s.push('\n');
         self.writer.write_all(s.as_bytes()).await?;
+        Ok(())
+    }
+
+    /// `tokio::io::BufWriter` — unlike `std`'s — does not flush on drop, so
+    /// callers must flush explicitly for a session to be durable before it
+    /// reaches a clean `close()`. The gateway calls this once per incoming
+    /// network read rather than per character/write: flushing on every
+    /// `record_output`/`record_input` call turned buffered I/O into a
+    /// syscall per keystroke, which is real overhead under many concurrent
+    /// sessions or bulk/automated attacker traffic. Flushing once per read
+    /// bounds worst-case data loss (on a kill mid-read) to at most one
+    /// network packet's worth of typing, instead of losing nothing — a
+    /// deliberate, small trade of durability granularity for throughput.
+    pub async fn flush(&mut self) -> AegisResult<()> {
         self.writer.flush().await?;
         Ok(())
     }

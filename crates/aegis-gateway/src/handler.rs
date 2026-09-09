@@ -432,6 +432,10 @@ impl Handler for ActiveSession {
                 _ => { self.last_byte = byte; }
             }
         }
+        // Flush once per network read rather than per character/write: bounds
+        // worst-case data loss on an abrupt disconnect to at most this one
+        // read's worth of typing, without paying a syscall per keystroke.
+        let _ = self.recorder.flush().await;
         Ok(())
     }
 

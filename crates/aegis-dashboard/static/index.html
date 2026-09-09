@@ -505,8 +505,25 @@ document.getElementById('kind-filter').addEventListener('change', (e) => {
 // number of pushEvents() calls landing in the same animation frame into one
 // render instead; normal (sparse) traffic still renders within ~16ms, so it
 // reads as instant either way.
+//
+// requestAnimationFrame is throttled or suspended entirely for hidden /
+// backgrounded tabs (browsers pause rAF to save power), which would silently
+// stop the "live" feed from updating whenever this dashboard isn't the
+// focused tab — exactly the case for a monitoring page meant to stay open on
+// a second monitor. Fall back to a timer while hidden, and catch up
+// immediately on refocus instead of waiting for that timer to fire.
 let renderScheduled = false;
 let pendingFreshCount = 0;
+let renderTimer = null;
+
+function flushRender() {
+  renderScheduled = false;
+  renderTimer = null;
+  const freshCount = pendingFreshCount;
+  pendingFreshCount = 0;
+  renderFeed(freshCount);
+  renderPayloads();
+}
 
 function pushEvents(events, {fresh} = {fresh: false}) {
   if (!events.length) return;
@@ -514,14 +531,19 @@ function pushEvents(events, {fresh} = {fresh: false}) {
   if (fresh) pendingFreshCount += events.length;
   if (renderScheduled) return;
   renderScheduled = true;
-  requestAnimationFrame(() => {
-    renderScheduled = false;
-    const freshCount = pendingFreshCount;
-    pendingFreshCount = 0;
-    renderFeed(freshCount);
-    renderPayloads();
-  });
+  if (document.hidden) {
+    renderTimer = setTimeout(flushRender, 200);
+  } else {
+    requestAnimationFrame(flushRender);
+  }
 }
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && renderTimer !== null) {
+    clearTimeout(renderTimer);
+    flushRender();
+  }
+});
 
 function setStatus(text, mode) {
   document.getElementById('status-text').textContent = text;
