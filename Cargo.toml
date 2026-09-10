@@ -44,6 +44,7 @@ axum               = "0.7"
 futures-util       = "0.3"
 tokio-stream       = { version = "0.1", features = ["sync"] }
 subtle             = "2"
+maxminddb          = "0.31"
 
 [profile.release]
 opt-level = 3

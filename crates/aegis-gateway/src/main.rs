@@ -3,6 +3,7 @@
 //! Starts the tokio runtime, provisions the golden rootfs, initializes all subsystems
 //! (collector, forensics engine, eBPF probes), and begins accepting SSH connections.
 
+mod geoip;
 mod handler;
 mod shell;
 mod vfs;
@@ -134,6 +135,11 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // GeoIP — optional, never blocks startup either way (see geoip.rs)
+    let geoip = Arc::new(
+        geoip::GeoIpLookup::load(config.geoip.geoip_db_path.as_deref(), config.geoip.asn_db_path.as_deref()).await,
+    );
+
     // Host key — load or generate & persist
     let keypair = load_or_create_host_key(config.gateway.host_key_path.as_deref()).await?;
 
@@ -156,6 +162,7 @@ async fn main() -> anyhow::Result<()> {
         config,
         event_tx,
         forensics,
+        geoip,
     };
     server
         .run_on_address(russh_config, &bind_addr)

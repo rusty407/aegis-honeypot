@@ -17,6 +17,7 @@
   <a href="#-quick-start">Quick Start</a> •
   <a href="#-telemetry--events">Telemetry</a> •
   <a href="#-forensics--payload-quarantine">Forensics</a> •
+  <a href="#-geoip-tagging">GeoIP</a> •
   <a href="#-deployment">Deployment</a>
 </p>
 
@@ -168,7 +169,7 @@ All activity is recorded in real time as JSON Lines in `attacks.json`:
 
 ```json
 {"event":"CREDENTIAL_HARVEST","timestamp":"2026-08-28T03:38:15Z","session_id":"c6c1baee68c8","ip":"198.51.100.2","username":"root","password":"password123","auth_method":"password"}
-{"event":"SESSION_START","timestamp":"2026-08-28T03:38:15Z","session_id":"c6c1baee68c8","ip":"198.51.100.2","port":54156}
+{"event":"SESSION_START","timestamp":"2026-08-28T03:38:15Z","session_id":"c6c1baee68c8","ip":"198.51.100.2","port":54156,"geo":{"country":"Germany","city":"Frankfurt am Main","asn":"AS24940 Hetzner Online GmbH","lat":50.1188,"lon":8.6843}}
 {"event":"COMMAND_RUN","timestamp":"2026-08-28T03:38:16Z","session_id":"c6c1baee68c8","ip":"198.51.100.2","command":"uname -a"}
 {"event":"COMMAND_RUN","timestamp":"2026-08-28T03:38:17Z","session_id":"c6c1baee68c8","ip":"198.51.100.2","command":"mkdir -p /tmp/botnet"}
 {"event":"PAYLOAD_CAPTURED","timestamp":"2026-08-28T03:38:20Z","session_id":"c6c1baee68c8","ip":"198.51.100.2","source_url":"http://c2.example.com/payload.bin","sha256":"b875f928546aee7855cb1db9afc8ab3f1a8a34d43de5bbd62f7076d7ba9f3917","size_bytes":1284,"quarantine_path":"./quarantine/b875f928546aee7855cb1db9afc8ab3f1a8a34d43de5bbd62f7076d7ba9f3917","file_type":"shell","iocs":{"strings_preview":["#!/bin/bash"],"ip_addresses":["198.51.100.99"],"urls":["http://c2.example.com/payload.bin"],"base64_blobs":[],"monero_wallets":[]}}
@@ -180,7 +181,7 @@ All activity is recorded in real time as JSON Lines in `attacks.json`:
 | Event | Description | Key Fields |
 | :--- | :--- | :--- |
 | `CREDENTIAL_HARVEST` | SSH auth attempt (passwords, pubkeys) | `username`, `password`, `auth_method`, `ip` |
-| `SESSION_START` | Interactive PTY channel open | `session_id`, `ip`, `port`, `timestamp` |
+| `SESSION_START` | Interactive PTY channel open | `session_id`, `ip`, `port`, `timestamp`, `geo` (optional — see [GeoIP Tagging](#-geoip-tagging)) |
 | `COMMAND_RUN` | Command executed by attacker | `session_id`, `command`, `timestamp` |
 | `PAYLOAD_CAPTURED` | Quarantined script, binary, or download | `sha256`, `size_bytes`, `quarantine_path`, `iocs` |
 | `SYSCALL_EXECVE` | eBPF process execution probe | `pid`, `filename`, `argv` |
@@ -200,6 +201,36 @@ When an attacker drops a dropper script, downloads a payload via `wget`/`curl`, 
    ```bash
    asciinema play sessions/session_id.cast
    ```
+
+---
+
+## 🌍 GeoIP Tagging
+
+Every `SESSION_START` event can carry a `geo` object (country, city, ASN, lat/lon) resolved from a **local** MaxMind GeoLite2 database — no outbound API calls, no per-lookup network round trip. It's entirely optional: with nothing configured, `geo` is simply absent and nothing else about the honeypot is affected.
+
+### Setup
+
+1. Create a free MaxMind account: **https://www.maxmind.com/en/geolite2/signup**
+2. Once logged in, generate a license key under **My License Keys**.
+3. Download the databases you want (both are free, and independent of each other):
+   - **GeoLite2-City** — country, city, latitude/longitude
+   - **GeoLite2-ASN** — network/ASN ownership (e.g. "Hetzner Online GmbH") — a *separate* download; MaxMind never bundles ASN data into the City database
+   ```bash
+   # Using their CLI downloader (geoipupdate), or a direct authenticated URL:
+   curl -o GeoLite2-City.tar.gz "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=YOUR_KEY&suffix=tar.gz"
+   tar xzf GeoLite2-City.tar.gz --strip-components=1 --wildcards '*/GeoLite2-City.mmdb'
+   ```
+4. Place the `.mmdb` file(s) wherever you like and point `[geoip]` at them in `deploy/config.toml`:
+   ```toml
+   [geoip]
+   geoip_db_path = "./GeoLite2-City.mmdb"
+   asn_db_path   = "./GeoLite2-ASN.mmdb"   # optional, independent of the above
+   ```
+5. Restart `aegis-gateway`. It logs which database(s) it loaded (or that GeoIP is disabled) once at startup.
+
+**This data goes stale** — MaxMind rebuilds GeoLite2 roughly every two weeks and IP-to-location mappings drift over time (ISPs reassign blocks, ASNs get bought and sold). Re-download periodically; a monthly cron job pointed at the URL above is enough for a honeypot's purposes. A stale database doesn't break anything, it just slowly gets less accurate.
+
+**Private/loopback/RFC1918 addresses are never sent to the database** — they'd never resolve to anything real. They're tagged `"country": "Local"` instead, so you can tell "this was a local test connection" apart from "we looked this up and MaxMind has no record for it" (`geo: null`).
 
 ---
 
@@ -235,6 +266,10 @@ bind_addr = "127.0.0.1"          # Loopback by default
 port = 8080
 require_auth = true              # Bearer token on every request. Only disable for local dev.
 token_path = "./dashboard_token" # Persisted & auto-generated on first run, same as host_key_path above.
+
+[geoip]
+# geoip_db_path = "./GeoLite2-City.mmdb"   # Optional. See the GeoIP Tagging section below.
+# asn_db_path   = "./GeoLite2-ASN.mmdb"    # Optional and independent of the above.
 ```
 
 **Why a persistent host key matters:** a returning attacker (or a scanner like Shodan/Censys) that sees a *different* SSH host key on every connection has effectively fingerprinted you as a honeypot that restarts per-session. `host_key_path` is generated once and reused across restarts; omit it only if you specifically want a fresh ephemeral key every run.

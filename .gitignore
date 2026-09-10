@@ -13,6 +13,11 @@ attacks.json
 host_key.pem
 dashboard_token
 
+# Real MaxMind GeoLite2 databases (licensed data, tens of MB, goes stale —
+# never commit these). Does not match the small test fixture under
+# crates/aegis-gateway/test-data/, which is meant to be committed.
+/*.mmdb
+
 # Environment & secrets
 .env
 .env.*

@@ -159,6 +159,7 @@ pub struct AegisServer {
     pub forensics: Arc<ForensicsEngine>,
     pub session_semaphore: Arc<Semaphore>,
     pub ip_guard: Arc<IpConnectionGuard>,
+    pub geoip: Arc<crate::geoip::GeoIpLookup>,
 }
 
 // ---------------------------------------------------------------------------
@@ -184,6 +185,7 @@ pub struct ActiveSession {
     /// slot back to the pool when the handler is dropped.
     _permit: OwnedSemaphorePermit,
     ip_guard: Arc<IpConnectionGuard>,
+    geoip: Arc<crate::geoip::GeoIpLookup>,
 }
 
 impl Drop for ActiveSession {
@@ -283,6 +285,7 @@ impl Handler for ActiveSession {
             session_id: self.meta.session_id.clone(),
             ip: self.meta.client_ip,
             port: self.meta.client_port,
+            geo: self.geoip.lookup(self.meta.client_ip),
         })).await;
 
         let banner = "\r\nLinux ubuntu-server-01 5.15.0-72-generic #79-Ubuntu SMP x86_64\r\nWelcome to Ubuntu 22.04.2 LTS (GNU/Linux 5.15.0-72-generic x86_64)\r\n\r\n * Documentation:  https://help.ubuntu.com\r\n * Management:     https://landscape.canonical.com\r\n * Support:        https://ubuntu.com/advantage\r\n\r\nLast login: Mon Aug 26 22:14:07 2026 from 192.0.2.100\r\n\r\n";
@@ -656,6 +659,7 @@ impl Server for AegisServer {
             is_ended: false,
             _permit: permit,
             ip_guard: self.ip_guard.clone(),
+            geoip: self.geoip.clone(),
         }))
     }
 }

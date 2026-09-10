@@ -27,6 +27,11 @@ pub struct Store {
     total_payloads: u64,
     unique_ips: HashSet<IpAddr>,
     ip_counts: HashMap<IpAddr, u64>,
+    /// Keyed by country name from `SessionStartEvent.geo`. The synthetic
+    /// "Local" tag (private/loopback IPs — see `aegis-gateway::geoip`) is
+    /// deliberately excluded here: it's not a real country and would just
+    /// dominate the ranking during local testing.
+    country_counts: HashMap<String, u64>,
     username_counts: HashMap<String, u64>,
     password_counts: HashMap<String, u64>,
     command_counts: HashMap<String, u64>,
@@ -45,8 +50,13 @@ impl Store {
         *self.ip_counts.entry(ip).or_insert(0) += 1;
 
         match &event {
-            TelemetryEvent::SessionStart(_) => {
+            TelemetryEvent::SessionStart(e) => {
                 self.total_sessions += 1;
+                if let Some(country) = e.geo.as_ref().and_then(|g| g.country.as_deref()) {
+                    if country != "Local" {
+                        *self.country_counts.entry(country.to_string()).or_insert(0) += 1;
+                    }
+                }
             }
             TelemetryEvent::CommandRun(e) => {
                 self.total_commands += 1;
@@ -93,6 +103,7 @@ impl Store {
             top_passwords: top_n(&self.password_counts),
             top_commands: top_n(&self.command_counts),
             top_ips: top_n_ip(&self.ip_counts),
+            top_countries: top_n(&self.country_counts),
             hourly_activity: self
                 .hourly_activity
                 .iter()
@@ -218,13 +229,14 @@ pub struct Summary {
     pub top_passwords: Vec<Ranked>,
     pub top_commands: Vec<Ranked>,
     pub top_ips: Vec<Ranked>,
+    pub top_countries: Vec<Ranked>,
     pub hourly_activity: Vec<HourBucket>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aegis_common::{CommandRunEvent, CredentialHarvestEvent, SessionId, AuthMethod};
+    use aegis_common::{CommandRunEvent, CredentialHarvestEvent, GeoIpInfo, SessionId, SessionStartEvent, AuthMethod};
     use std::net::Ipv4Addr;
 
     fn ip() -> IpAddr {
@@ -365,5 +377,48 @@ mod tests {
         assert_eq!(timeline.len(), 2);
         assert!(matches!(timeline[0], TelemetryEvent::CredentialHarvest(_)));
         assert!(matches!(timeline[1], TelemetryEvent::CommandRun(e) if e.command == "whoami"));
+    }
+
+    #[test]
+    fn top_countries_counts_real_countries_and_excludes_local() {
+        let mut store = Store::default();
+
+        store.ingest(TelemetryEvent::SessionStart(SessionStartEvent {
+            timestamp: Utc::now(),
+            session_id: SessionId::new(),
+            ip: ip(),
+            port: 4444,
+            geo: Some(GeoIpInfo { country: Some("Sweden".into()), city: Some("Linköping".into()), ..Default::default() }),
+        }));
+        store.ingest(TelemetryEvent::SessionStart(SessionStartEvent {
+            timestamp: Utc::now(),
+            session_id: SessionId::new(),
+            ip: ip(),
+            port: 4445,
+            geo: Some(GeoIpInfo { country: Some("Sweden".into()), ..Default::default() }),
+        }));
+        // A loopback/private test connection tagged "Local" must not pollute
+        // the country ranking.
+        store.ingest(TelemetryEvent::SessionStart(SessionStartEvent {
+            timestamp: Utc::now(),
+            session_id: SessionId::new(),
+            ip: ip(),
+            port: 4446,
+            geo: Some(GeoIpInfo { country: Some("Local".into()), ..Default::default() }),
+        }));
+        // No GeoIP configured at all for this one — must not panic or count.
+        store.ingest(TelemetryEvent::SessionStart(SessionStartEvent {
+            timestamp: Utc::now(),
+            session_id: SessionId::new(),
+            ip: ip(),
+            port: 4447,
+            geo: None,
+        }));
+
+        let summary = store.summary();
+        assert_eq!(summary.total_sessions, 4);
+        assert_eq!(summary.top_countries.len(), 1);
+        assert_eq!(summary.top_countries[0].value, "Sweden");
+        assert_eq!(summary.top_countries[0].count, 2);
     }
 }

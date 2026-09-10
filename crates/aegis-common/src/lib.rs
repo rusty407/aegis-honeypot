@@ -127,6 +127,26 @@ pub struct SessionStartEvent {
     pub session_id: SessionId,
     pub ip: IpAddr,
     pub port: u16,
+    /// Looked up once per session against a local MaxMind GeoLite2 database.
+    /// `None` when GeoIP isn't configured, the lookup failed, or the DB has
+    /// no record for this IP — never blocks or fails the session either way.
+    pub geo: Option<GeoIpInfo>,
+}
+
+/// Resolved GeoIP data for one source IP. Every field is independently
+/// optional: a City database gives country/city/lat/lon, an ASN database
+/// (always a *separate* MaxMind download — never bundled into City) gives
+/// `asn`, and either or both may be absent, missing, or not cover a given
+/// address. Private/loopback/link-local addresses are tagged
+/// `country: Some("Local")` with everything else `None` rather than being
+/// sent to the database at all, where they'd never resolve to anything real.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct GeoIpInfo {
+    pub country: Option<String>,
+    pub city: Option<String>,
+    pub asn: Option<String>,
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,6 +303,21 @@ pub struct AegisConfig {
     /// paths above (it tails `attacks_log` and reports on `quarantine_dir`).
     #[serde(default = "default_dashboard_config")]
     pub dashboard: DashboardConfig,
+    #[serde(default)]
+    pub geoip: GeoIpConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GeoIpConfig {
+    /// Path to a local GeoLite2-City `.mmdb` file (gives country/city/lat/lon).
+    /// Free from MaxMind — see the README's GeoIP section. Omit, or point at
+    /// a file that doesn't exist, to disable GeoIP tagging entirely; nothing
+    /// else about the honeypot depends on this being present.
+    pub geoip_db_path: Option<String>,
+    /// Path to a local GeoLite2-ASN `.mmdb` file (gives the network/ASN).
+    /// A separate free download from MaxMind — ASN data is never bundled
+    /// into the City database. Independently optional from `geoip_db_path`.
+    pub asn_db_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -395,6 +430,7 @@ impl Default for AegisConfig {
                 json: false,
             },
             dashboard: default_dashboard_config(),
+            geoip: GeoIpConfig::default(),
         }
     }
 }

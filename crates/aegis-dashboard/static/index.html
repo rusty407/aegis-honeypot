@@ -125,7 +125,8 @@
   th, td { text-align: left; padding: 8px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   th { color: var(--muted-2); font-weight: 600; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; }
   td.count { color: var(--accent); text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
-  .rank-tables { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .rank-tables { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+  @media (max-width: 1100px) { .rank-tables { grid-template-columns: repeat(3, 1fr); } }
   @media (max-width: 900px) { .rank-tables { grid-template-columns: 1fr 1fr; } }
   .rank-tables td.clickable, .rank-tables th { cursor: default; }
   .rank-tables tr.clickable { cursor: pointer; transition: background .12s ease; }
@@ -166,6 +167,7 @@
   .b-syscall_execve, .b-syscall_connect, .b-syscall_memfd_create { background: rgba(184,146,240,0.14); color: #b892f0; }
   .ip { color: var(--muted); font-family: var(--mono); font-size: 0.95em; }
   .ip.linklike:hover { color: var(--accent); text-decoration: underline; }
+  .geo-tag { font-family: var(--sans); font-size: 10px; color: var(--muted-2); white-space: nowrap; margin-top: 1px; }
   .session-link { color: var(--link); text-decoration: none; }
   .session-link:hover { text-decoration: underline; }
   .empty { color: var(--muted); font-style: italic; padding: 12px 0; }
@@ -279,6 +281,7 @@
           <div><table><thead><tr><th>Password</th><th></th></tr></thead><tbody id="top-passwords"></tbody></table></div>
           <div><table><thead><tr><th>Command</th><th></th></tr></thead><tbody id="top-commands"></tbody></table></div>
           <div><table><thead><tr><th>Source IP</th><th></th></tr></thead><tbody id="top-ips"></tbody></table></div>
+          <div><table><thead><tr><th>Country</th><th></th></tr></thead><tbody id="top-countries"></tbody></table></div>
         </div>
       </div>
     </div>
@@ -339,8 +342,19 @@ const state = {
   feed: [],          // newest first, capped
   kindFilter: '',
   ipFilter: null,
+  // session_id -> { country, city } — GeoIP is only ever attached to a
+  // SESSION_START event (looked up once per session), so every other event
+  // in that session is annotated by joining on this map rather than the
+  // backend repeating the lookup per event.
+  sessionGeo: {},
 };
 const FEED_CAP = 500;
+
+function geoLabel(sessionId) {
+  const geo = state.sessionGeo[sessionId];
+  if (!geo || !geo.country) return '';
+  return geo.city ? `${geo.city}, ${geo.country}` : geo.country;
+}
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -402,6 +416,7 @@ async function refreshSummary() {
     renderRanked('top-passwords', summary.top_passwords, false);
     renderRanked('top-commands', summary.top_commands, false);
     renderRanked('top-ips', summary.top_ips, true);
+    renderRanked('top-countries', summary.top_countries, false);
   } catch (e) { /* summary poll is best-effort; live status is tracked by the SSE connection */ }
 }
 
@@ -440,9 +455,11 @@ function renderFeed(freshCount) {
     const time = new Date(ev.timestamp).toLocaleTimeString();
     const badgeClass = 'b-' + ev.event.toLowerCase();
     const rowClass = i < freshCount ? ' class="new-row"' : '';
+    const geo = geoLabel(ev.session_id);
+    const geoLine = geo ? `<div class="geo-tag">${escapeHtml(geo)}</div>` : '';
     return `<tr${rowClass} data-session="${escapeHtml(ev.session_id)}">
       <td>${escapeHtml(time)}</td>
-      <td class="ip linklike" data-ip="${escapeHtml(ev.ip)}">${escapeHtml(ev.ip)}</td>
+      <td class="ip linklike" data-ip="${escapeHtml(ev.ip)}">${escapeHtml(ev.ip)}${geoLine}</td>
       <td><span class="badge ${badgeClass}">${escapeHtml(ev.event)}</span></td>
       <td>${eventDetail(ev)}</td>
     </tr>`;
@@ -547,6 +564,11 @@ function flushRender() {
 function pushEvents(events, {fresh} = {fresh: false}) {
   if (!events.length) return;
   state.feed = events.concat(state.feed).slice(0, FEED_CAP);
+  for (const ev of events) {
+    if (ev.event === 'SESSION_START' && ev.geo) {
+      state.sessionGeo[ev.session_id] = { country: ev.geo.country, city: ev.geo.city };
+    }
+  }
   if (fresh) pendingFreshCount += events.length;
   if (renderScheduled) return;
   renderScheduled = true;
@@ -645,6 +667,11 @@ function renderModalMeta(sessionId, timeline) {
   const cred = timeline.find(e => e.event === 'CREDENTIAL_HARVEST');
   const parts = [];
   if (start) parts.push(`<span>IP: <b>${escapeHtml(start.ip)}:${start.port}</b></span>`);
+  if (start && start.geo && start.geo.country) {
+    const label = start.geo.city ? `${start.geo.city}, ${start.geo.country}` : start.geo.country;
+    parts.push(`<span>Location: <b>${escapeHtml(label)}</b></span>`);
+  }
+  if (start && start.geo && start.geo.asn) parts.push(`<span>ASN: <b>${escapeHtml(start.geo.asn)}</b></span>`);
   if (cred) parts.push(`<span>Auth: <b>${escapeHtml(cred.username)} / ${escapeHtml(cred.password ?? '')}</b></span>`);
   parts.push(`<span>Duration: <b>${end ? end.duration_secs.toFixed(1) + 's' : 'in progress'}</b></span>`);
   parts.push(`<span>Commands: <b>${timeline.filter(e => e.event === 'COMMAND_RUN').length}</b></span>`);

@@ -29,3 +29,10 @@ bind_addr = "127.0.0.1"          # Loopback by default
 port = 8080
 require_auth = true              # Bearer token on every request. Only disable for local dev.
 token_path = "./dashboard_token" # Persisted & auto-generated on first run, same as host_key_path above.
+
+[geoip]
+# Both optional and independent — see the README's GeoIP section for where
+# to get free MaxMind databases. Omit either (or both) to disable that part
+# of GeoIP tagging; nothing else about the honeypot depends on this.
+# geoip_db_path = "./GeoLite2-City.mmdb"   # country, city, lat/lon
+# asn_db_path   = "./GeoLite2-ASN.mmdb"    # network/ASN — a separate download
