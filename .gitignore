@@ -11,6 +11,7 @@ overlay/*
 !overlay/.gitkeep
 attacks.json
 host_key.pem
+dashboard_token
 
 # Environment & secrets
 .env

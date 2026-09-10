@@ -51,12 +51,15 @@ dependencies = [
  "axum",
  "chrono",
  "futures-util",
+ "hex",
  "serde",
  "serde_json",
+ "subtle",
  "tokio",
  "tokio-stream",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

@@ -316,6 +316,25 @@
 </div>
 
 <script>
+// Every route requires a bearer token (see aegis-dashboard's require_auth
+// middleware) — including this page itself, so the very first load has to
+// come in as `?token=<token>` (from the value logged at server startup).
+// From then on the token is remembered in localStorage and the URL is
+// scrubbed immediately so it doesn't linger in history/referrers.
+const AUTH_TOKEN = (() => {
+  const fromUrl = new URLSearchParams(location.search).get('token');
+  if (fromUrl) {
+    try { localStorage.setItem('aegis_token', fromUrl); } catch (e) { /* private browsing, etc. */ }
+    history.replaceState(null, '', location.pathname);
+    return fromUrl;
+  }
+  try { return localStorage.getItem('aegis_token') || ''; } catch (e) { return ''; }
+})();
+
+function authHeaders() {
+  return AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {};
+}
+
 const state = {
   feed: [],          // newest first, capped
   kindFilter: '',
@@ -374,7 +393,7 @@ function renderRanked(elId, items, clickable) {
 
 async function refreshSummary() {
   try {
-    const res = await fetch('/api/summary');
+    const res = await fetch('/api/summary', { headers: authHeaders() });
     if (!res.ok) throw new Error('bad response');
     const summary = await res.json();
     renderStats(summary);
@@ -553,14 +572,17 @@ function setStatus(text, mode) {
 
 async function loadInitialFeed() {
   try {
-    const res = await fetch('/api/events?limit=200');
+    const res = await fetch('/api/events?limit=200', { headers: authHeaders() });
     const events = await res.json();
     pushEvents(events, {fresh: false});
   } catch (e) { /* SSE will still populate the feed once connected */ }
 }
 
 function connectStream() {
-  const es = new EventSource('/api/stream');
+  // EventSource can't set an Authorization header, so the token goes in the
+  // query string here specifically — every other request uses the header.
+  const url = AUTH_TOKEN ? `/api/stream?token=${encodeURIComponent(AUTH_TOKEN)}` : '/api/stream';
+  const es = new EventSource(url);
   es.addEventListener('telemetry', (e) => {
     try { pushEvents([JSON.parse(e.data)], {fresh: true}); } catch (err) { /* ignore malformed frame */ }
   });
@@ -597,7 +619,7 @@ async function openSessionModal(sessionId) {
   document.getElementById('replay-time').textContent = '';
 
   try {
-    const timeline = await (await fetch(`/api/session/${encodeURIComponent(sessionId)}`)).json();
+    const timeline = await (await fetch(`/api/session/${encodeURIComponent(sessionId)}`, { headers: authHeaders() })).json();
     renderModalMeta(sessionId, timeline);
     renderModalTimeline(timeline);
   } catch (e) {
@@ -605,7 +627,7 @@ async function openSessionModal(sessionId) {
   }
 
   try {
-    const castRes = await fetch(`/api/session/${encodeURIComponent(sessionId)}/cast`);
+    const castRes = await fetch(`/api/session/${encodeURIComponent(sessionId)}/cast`, { headers: authHeaders() });
     if (castRes.ok) {
       const text = await castRes.text();
       setupReplay(text);

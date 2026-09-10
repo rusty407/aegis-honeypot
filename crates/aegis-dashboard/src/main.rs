@@ -16,10 +16,11 @@
 mod store;
 
 use aegis_common::{AegisConfig, TelemetryEvent};
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{Path, Query, Request, State};
+use axum::http::{header, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::{Html, IntoResponse, Json};
+use axum::response::{Html, IntoResponse, Json, Response};
 use axum::routing::get;
 use axum::Router;
 use futures_util::StreamExt;
@@ -29,6 +30,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use store::Store;
+use subtle::ConstantTimeEq;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::{broadcast, RwLock};
 use tokio_stream::wrappers::BroadcastStream;
@@ -49,6 +51,10 @@ struct AppState {
     /// Fan-out of every ingested event to connected `/api/stream` clients.
     live: broadcast::Sender<TelemetryEvent>,
     sessions_dir: PathBuf,
+    /// Bearer token every request must present (unless `require_auth` is
+    /// off). `Arc` so cloning `AppState` per-request doesn't reallocate it.
+    token: Arc<String>,
+    require_auth: bool,
 }
 
 #[tokio::main]
@@ -64,10 +70,20 @@ async fn main() -> anyhow::Result<()> {
 
     let attacks_log = PathBuf::from(&config.forensics.attacks_log);
     let (live_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
+
+    let token = if config.dashboard.require_auth {
+        load_or_create_token(&config.dashboard.token_path).await?
+    } else {
+        warn!("require_auth is disabled — the dashboard is wide open to anyone who can reach it. Local dev only.");
+        String::new()
+    };
+
     let state = AppState {
         store: Arc::new(RwLock::new(Store::default())),
         live: live_tx,
         sessions_dir: PathBuf::from(&config.forensics.sessions_dir),
+        token: Arc::new(token),
+        require_auth: config.dashboard.require_auth,
     };
 
     info!("Tailing {}", attacks_log.display());
@@ -80,20 +96,113 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/stream", get(stream))
         .route("/api/session/:id", get(session_timeline))
         .route("/api/session/:id/cast", get(session_cast))
+        // `.layer` (not `.route_layer`) so every path — including a 404
+        // fallback — goes through auth; nothing is reachable unauthenticated.
+        .layer(middleware::from_fn_with_state(state.clone(), require_auth))
         .with_state(state.clone());
 
     let bind_addr = format!("{}:{}", config.dashboard.bind_addr, config.dashboard.port);
     info!("aegis-dashboard listening on http://{bind_addr}");
     if config.dashboard.bind_addr != "127.0.0.1" && config.dashboard.bind_addr != "localhost" {
         warn!(
-            "Dashboard is bound to {} — it has no authentication, so only expose it on a trusted network.",
-            config.dashboard.bind_addr
+            "Dashboard is bound to {} — {}",
+            config.dashboard.bind_addr,
+            if state.require_auth {
+                "bearer-token auth is on, but confirm you actually want this off loopback."
+            } else {
+                "and require_auth is OFF. Anyone who can reach this network sees everything."
+            }
         );
     }
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Load the dashboard's bearer token from `path`, generating and persisting a
+/// new one (32 random bytes, hex-encoded) on first run — same pattern as the
+/// gateway's `load_or_create_host_key`. The token is logged once at startup
+/// since there's no other way for an operator to retrieve it short of
+/// reading the file directly; `path` is also mentioned so it's easy to find
+/// again later (e.g. to rotate it — just delete the file and restart).
+async fn load_or_create_token(path: &str) -> anyhow::Result<String> {
+    let path_buf = std::path::Path::new(path);
+    match tokio::fs::read_to_string(path_buf).await {
+        Ok(token) => {
+            info!("Loaded dashboard bearer token from {path}");
+            Ok(token.trim().to_string())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let token = generate_token();
+            if let Some(parent) = path_buf.parent() {
+                if !parent.as_os_str().is_empty() {
+                    tokio::fs::create_dir_all(parent).await?;
+                }
+            }
+            tokio::fs::write(path_buf, &token).await?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                tokio::fs::set_permissions(path_buf, std::fs::Permissions::from_mode(0o600)).await?;
+            }
+            warn!("No dashboard token found at {path} — generated a new one (saved there, mode 0600).");
+            warn!("Dashboard bearer token: {token}");
+            warn!("Pass it as `Authorization: Bearer <token>`, or open the dashboard once as `?token=<token>` (the page remembers it after that). Delete {path} and restart to rotate it.");
+            Ok(token)
+        }
+        Err(e) => Err(anyhow::anyhow!("failed to read dashboard token at {path}: {e}")),
+    }
+}
+
+/// 32 random bytes (256 bits) as lowercase hex, built from two v4 UUIDs
+/// rather than pulling in a `rand` dependency just for this — `uuid` and
+/// `hex` are already in the tree, and `Uuid::new_v4` draws from the OS CSPRNG.
+fn generate_token() -> String {
+    let mut bytes = Vec::with_capacity(32);
+    bytes.extend_from_slice(uuid::Uuid::new_v4().as_bytes());
+    bytes.extend_from_slice(uuid::Uuid::new_v4().as_bytes());
+    hex::encode(bytes)
+}
+
+/// Bearer-token auth, checked via `Authorization: Bearer <token>` or a
+/// `?token=` query param (needed for `/api/stream`, since browsers'
+/// `EventSource` can't set custom headers). Applied to every route via
+/// `.layer(...)`, not per-route, so nothing is reachable unauthenticated —
+/// including the page itself, which is why the frontend's very first load
+/// has to come in via `?token=` before it can persist the token client-side.
+async fn require_auth(State(state): State<AppState>, request: Request, next: Next) -> Result<Response, StatusCode> {
+    if !state.require_auth {
+        return Ok(next.run(request).await);
+    }
+
+    let header_token = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+
+    let provided = header_token.map(str::to_owned).or_else(|| query_token(request.uri()));
+
+    match provided {
+        Some(token) if constant_time_eq(&token, &state.token) => Ok(next.run(request).await),
+        _ => Err(StatusCode::UNAUTHORIZED),
+    }
+}
+
+/// Our tokens are plain lowercase hex — no `=`, `&`, or `%` in them — so a
+/// bare split is enough here without pulling in a query-string/URL crate
+/// just for this one key.
+fn query_token(uri: &axum::http::Uri) -> Option<String> {
+    uri.query()?.split('&').find_map(|pair| {
+        let (k, v) = pair.split_once('=')?;
+        (k == "token").then(|| v.to_string())
+    })
+}
+
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    a.len() == b.len() && bool::from(a.ct_eq(b))
 }
 
 /// Poll `attacks.json` for newly appended lines, fold each parsed event into
@@ -240,5 +349,44 @@ async fn session_cast(State(state): State<AppState>, Path(id): Path<String>) -> 
     match tokio::fs::read_to_string(&path).await {
         Ok(content) => (StatusCode::OK, content),
         Err(_) => (StatusCode::NOT_FOUND, String::new()),
+    }
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use super::*;
+
+    #[test]
+    fn generate_token_is_64_hex_chars_and_actually_random() {
+        let a = generate_token();
+        let b = generate_token();
+        assert_eq!(a.len(), 64);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(a, b, "two generated tokens collided — RNG is broken");
+    }
+
+    #[test]
+    fn constant_time_eq_matches_and_rejects() {
+        assert!(constant_time_eq("abc123", "abc123"));
+        assert!(!constant_time_eq("abc123", "abc124"));
+        assert!(!constant_time_eq("abc123", "abc12"), "different lengths must never match");
+        assert!(!constant_time_eq("", "abc123"));
+        assert!(constant_time_eq("", ""));
+    }
+
+    #[test]
+    fn query_token_extracts_from_query_string() {
+        let uri: axum::http::Uri = "/api/stream?token=deadbeef&limit=5".parse().unwrap();
+        assert_eq!(query_token(&uri), Some("deadbeef".to_string()));
+
+        let uri: axum::http::Uri = "/api/stream?limit=5".parse().unwrap();
+        assert_eq!(query_token(&uri), None);
+
+        let uri: axum::http::Uri = "/api/stream".parse().unwrap();
+        assert_eq!(query_token(&uri), None);
+
+        // token as the first param, with others after
+        let uri: axum::http::Uri = "/api/stream?token=abc&type=COMMAND_RUN".parse().unwrap();
+        assert_eq!(query_token(&uri), Some("abc".to_string()));
     }
 }

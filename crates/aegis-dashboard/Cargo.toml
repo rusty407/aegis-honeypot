@@ -17,3 +17,6 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 futures-util = { workspace = true }
 tokio-stream = { workspace = true }
+uuid = { workspace = true }
+hex = { workspace = true }
+subtle = { workspace = true }

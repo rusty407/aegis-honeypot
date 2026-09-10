@@ -289,13 +289,34 @@ pub struct AegisConfig {
 pub struct DashboardConfig {
     pub bind_addr: String,
     pub port: u16,
+    /// Require a bearer token (`Authorization: Bearer <token>`, or `?token=`
+    /// on the SSE endpoint since `EventSource` can't set headers) on every
+    /// request. Defaults to true; only disable for local dev where the
+    /// dashboard never leaves loopback.
+    #[serde(default = "default_require_auth")]
+    pub require_auth: bool,
+    /// Path to the persistent bearer token. Generated on first run if
+    /// missing and reused across restarts — same pattern as the gateway's
+    /// `host_key_path`.
+    #[serde(default = "default_token_path")]
+    pub token_path: String,
 }
 
 fn default_dashboard_config() -> DashboardConfig {
     DashboardConfig {
         bind_addr: "127.0.0.1".into(),
         port: 8080,
+        require_auth: default_require_auth(),
+        token_path: default_token_path(),
     }
+}
+
+fn default_require_auth() -> bool {
+    true
+}
+
+fn default_token_path() -> String {
+    "./dashboard_token".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

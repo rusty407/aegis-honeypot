@@ -23,3 +23,9 @@ string_min_len  = 6
 [logging]
 level = "info"
 json  = false
+
+[dashboard]
+bind_addr = "127.0.0.1"          # Loopback by default
+port = 8080
+require_auth = true              # Bearer token on every request. Only disable for local dev.
+token_path = "./dashboard_token" # Persisted & auto-generated on first run, same as host_key_path above.

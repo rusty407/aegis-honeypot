@@ -150,7 +150,13 @@ In a third terminal, start the dashboard (a separate, unprivileged process — i
 ./target/release/aegis-dashboard deploy/config.toml
 ```
 
-Open **http://127.0.0.1:8080** for live stats, top credentials/commands/source IPs, an hourly activity chart, and a real-time event feed pushed over Server-Sent Events (no polling delay). It binds to loopback only by default — see the `[dashboard]` section in Configuration below to expose it elsewhere (it has no authentication, so only do this on a trusted network).
+On first run it generates a random bearer token, saves it to `dashboard_token` (mode `0600`, path configurable via `token_path`), and logs it once:
+```
+Dashboard bearer token: 9f2c1a...  (64 hex chars)
+```
+Open **http://127.0.0.1:8080/?token=<that token>** the first time — the page stores it in `localStorage` and cleans the URL, so subsequent visits just need `http://127.0.0.1:8080`. Every route requires the token; the API accepts it as `Authorization: Bearer <token>` or, for the live-feed endpoint specifically (`EventSource` can't set custom headers), `?token=<token>`. Set `dashboard.require_auth = false` in the config to disable this entirely for local dev.
+
+It binds to loopback only by default — see the `[dashboard]` section in Configuration below before exposing it elsewhere.
 
 Click any session ID in the feed to drill down: full event timeline for that session, plus an in-browser replay of the actual terminal recording (`sessions/*.cast`) with play/pause and speed controls — no external player or CDN dependency, just a small bundled terminal-buffer emulator. Click a source IP anywhere to filter the feed to that attacker. Captured payloads get their own panel with expandable IOC details (extracted IPs, URLs, base64 blobs, Monero wallets).
 
@@ -225,8 +231,10 @@ level = "info"
 json = false
 
 [dashboard]
-bind_addr = "127.0.0.1"   # Loopback by default — the dashboard has no auth
+bind_addr = "127.0.0.1"          # Loopback by default
 port = 8080
+require_auth = true              # Bearer token on every request. Only disable for local dev.
+token_path = "./dashboard_token" # Persisted & auto-generated on first run, same as host_key_path above.
 ```
 
 **Why a persistent host key matters:** a returning attacker (or a scanner like Shodan/Censys) that sees a *different* SSH host key on every connection has effectively fingerprinted you as a honeypot that restarts per-session. `host_key_path` is generated once and reused across restarts; omit it only if you specifically want a fresh ephemeral key every run.
@@ -269,6 +277,7 @@ docker run -d \
 - **SSRF Shield:** In-flight payload downloads to RFC 1918 private IP ranges, loopback (`127.0.0.0/8`), and link-local addresses are rejected to prevent internal network scanning.
 - **Resource Protection:** A global `tokio::sync::Semaphore` caps total concurrent sessions at `max_sessions`; a per-IP admission guard additionally caps concurrent sessions and connection rate per source IP (`max_sessions_per_ip`, `max_connects_per_min_per_ip`), rejecting excess connections before a sandbox or recorder is provisioned for them.
 - **Persistent Host Key:** The SSH host key is generated once and reused across restarts (`host_key_path`), avoiding the fingerprintable tell of a host key that changes on every reconnect.
+- **Dashboard Auth:** Every dashboard route requires a bearer token (auto-generated, persisted to `token_path`, constant-time compared) unless `require_auth` is explicitly disabled for local dev.
 
 ---
 

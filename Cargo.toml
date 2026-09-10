@@ -43,6 +43,7 @@ async-trait        = "0.1"
 axum               = "0.7"
 futures-util       = "0.3"
 tokio-stream       = { version = "0.1", features = ["sync"] }
+subtle             = "2"
 
 [profile.release]
 opt-level = 3
