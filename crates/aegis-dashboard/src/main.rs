@@ -233,24 +233,82 @@ async fn require_auth(State(state): State<AppState>, request: Request, next: Nex
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::to_owned);
 
     // A token in a URL ends up in reverse-proxy access logs, browser history,
     // `Referer` headers and CDN cache keys — none of which have the 0600
-    // permissions and retention of the token file itself. The `EventSource`
-    // API genuinely cannot set request headers, and the page itself has to be
-    // reachable to bootstrap, so the query fallback is scoped to exactly those
-    // two paths instead of being accepted on every route.
-    let path = request.uri().path();
+    // permissions and retention of the token file itself. So the query
+    // parameter is scoped to the only two paths that cannot do better:
+    // `/api/stream`, because `EventSource` cannot set request headers, and
+    // `/`, because the very first page load has nothing else to present.
+    // Owned: `request` is moved into `next.run` below, so nothing may still
+    // be borrowing from it at that point.
+    let path = request.uri().path().to_owned();
     let query_allowed = path == "/" || path == "/api/stream";
-    let provided = header_token
-        .map(str::to_owned)
-        .or_else(|| query_allowed.then(|| query_token(request.uri())).flatten());
+    let query = query_allowed.then(|| query_token(request.uri())).flatten();
 
-    match provided {
-        Some(token) if constant_time_eq(&token, &state.token) => Ok(next.run(request).await),
+    // The cookie is what makes the page *reloadable*. The frontend scrubs the
+    // token out of the URL immediately after the first load and keeps it in
+    // `localStorage`, but a browser cannot attach `localStorage` to the HTML
+    // document request — so without this, every reload, new tab and bookmark
+    // hit a bare `/` and got a 401 with no way to recover short of pasting the
+    // token back into the address bar.
+    //
+    // It is also strictly better than the query parameter it supersedes:
+    // `HttpOnly` keeps it out of reach of any script on the page, so an XSS
+    // that would have read the `localStorage` copy cannot read this one.
+    let cookie = cookie_token(&request);
+
+    let (token, from_query) = match (header_token, cookie, query) {
+        (Some(t), _, _) => (Some(t), false),
+        (_, Some(t), _) => (Some(t), false),
+        (_, _, Some(t)) => (Some(t), true),
+        _ => (None, false),
+    };
+
+    match token {
+        Some(token) if constant_time_eq(&token, &state.token) => {
+            let mut response = next.run(request).await;
+            // Only mint the cookie when the credential arrived by query on the
+            // page itself; API calls that already authenticate per-request
+            // have no need for ambient credentials.
+            if from_query && path == "/" {
+                if let Ok(value) = header::HeaderValue::from_str(&format!(
+                    "{COOKIE_NAME}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800"
+                )) {
+                    response.headers_mut().insert(header::SET_COOKIE, value);
+                }
+            }
+            Ok(response)
+        }
         _ => Err(StatusCode::UNAUTHORIZED),
     }
+}
+
+/// Name of the session cookie the dashboard sets after a successful
+/// `?token=` bootstrap.
+///
+/// Note for a non-loopback deployment: add `Secure` to the attributes below
+/// once the dashboard is behind TLS. It is omitted here because `Secure`
+/// cookies are not stored over plain HTTP, which would break the default
+/// loopback setup.
+const COOKIE_NAME: &str = "aegis_token";
+
+/// Extract our session cookie from the `Cookie` header.
+///
+/// Hand-parsed rather than pulling in a cookie crate: the header is a
+/// `; `-separated list of `name=value` pairs and we want exactly one name.
+fn cookie_token(request: &Request) -> Option<String> {
+    request
+        .headers()
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())?
+        .split(';')
+        .find_map(|pair| {
+            let (k, v) = pair.split_once('=')?;
+            (k.trim() == COOKIE_NAME).then(|| v.trim().to_owned())
+        })
 }
 
 /// Our tokens are plain lowercase hex — no `=`, `&`, or `%` in them — so a
@@ -504,6 +562,48 @@ mod auth_tests {
         assert!(!constant_time_eq("abc123", "abc12"), "different lengths must never match");
         assert!(!constant_time_eq("", "abc123"));
         assert!(constant_time_eq("", ""));
+    }
+
+    fn req_with_cookie(value: &str) -> Request {
+        Request::builder()
+            .uri("/")
+            .header(header::COOKIE, value)
+            .body(axum::body::Body::empty())
+            .unwrap()
+    }
+
+    /// The page scrubs `?token=` out of the URL after the first load, so a
+    /// reload arrives as a bare `/` carrying only the cookie. If cookie
+    /// parsing breaks, the dashboard becomes unreloadable — a 401 with no
+    /// recovery short of pasting the token back into the address bar.
+    #[test]
+    fn cookie_token_is_extracted_for_page_reloads() {
+        assert_eq!(
+            cookie_token(&req_with_cookie("aegis_token=abc123")),
+            Some("abc123".to_string())
+        );
+        // Real browsers send several cookies, in any order, space-separated.
+        assert_eq!(
+            cookie_token(&req_with_cookie("other=1; aegis_token=abc123; third=2")),
+            Some("abc123".to_string())
+        );
+        assert_eq!(
+            cookie_token(&req_with_cookie("theme=dark; aegis_token=xyz")),
+            Some("xyz".to_string())
+        );
+    }
+
+    #[test]
+    fn cookie_token_absent_or_unrelated_yields_none() {
+        assert_eq!(cookie_token(&req_with_cookie("other=1; third=2")), None);
+        assert_eq!(cookie_token(&req_with_cookie("")), None);
+        // A prefix match must not count as our cookie.
+        assert_eq!(cookie_token(&req_with_cookie("not_aegis_token=abc")), None);
+        let bare = Request::builder()
+            .uri("/")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        assert_eq!(cookie_token(&bare), None);
     }
 
     #[test]
