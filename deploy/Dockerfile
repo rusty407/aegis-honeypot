@@ -8,8 +8,11 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /build
 COPY . .
 
-# Build all workspace crates
-RUN cargo build --release -p aegis-gateway
+# Build all workspace crates.
+# `--locked` is required, not optional: without it a fresh build can silently
+# resolve dependency versions other than the audited ones in Cargo.lock, which
+# for an internet-facing SSH daemon defeats the point of auditing them.
+RUN cargo build --release --locked -p aegis-gateway
 
 # ─── Stage 2: Minimal Runtime ─────────────────────────────────────────────────
 FROM debian:bookworm-slim
@@ -30,13 +33,24 @@ COPY deploy/config.toml ./config.toml
 
 # ─── Capability Notes ─────────────────────────────────────────────────────────
 # Requires at runtime:
-#   cap_bpf          — load eBPF programs
-#   cap_net_admin    — attach TC filters / XDP
-#   cap_sys_admin    — OverlayFS namespace mounts
+#   cap_sys_admin    — OverlayFS mounts (see the caveat below)
 #   net_bind_service — bind port 22 (if port < 1024)
 #
-# docker run --cap-add=CAP_BPF --cap-add=CAP_NET_ADMIN \
-#            --cap-add=CAP_SYS_ADMIN -p 22:2222 aegis-honeypot
+# cap_bpf / cap_net_admin are NOT requested: the eBPF probes are not compiled
+# into the binary (aegis-ebpf ships an empty bytecode blob), so granting them
+# buys nothing and widens the process's privilege for no benefit.
+#
+# CAVEAT on CAP_SYS_ADMIN: it is close to root-equivalent, and this container
+# runs as the unprivileged `aegis` user — container capabilities are not
+# inherited into a non-root user's permitted set without file capabilities or
+# ambient caps, so the OverlayFS mount will most likely fail and fall back to
+# directory-only isolation. That fallback is a perfectly reasonable way to run
+# this (nothing is ever executed from the mount either way); it is listed here
+# so the choice is deliberate rather than an unnoticed silent failure. If you
+# do not need real mounts, drop the capability entirely:
+#
+#   docker run --security-opt no-new-privileges --read-only \
+#              -v aegis-data:/opt/aegis -p 22:2222 aegis-honeypot
 
 EXPOSE 2222
 

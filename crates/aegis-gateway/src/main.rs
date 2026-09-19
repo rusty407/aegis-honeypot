@@ -12,8 +12,8 @@ use aegis_common::AegisConfig;
 use aegis_collector::EventCollector;
 use aegis_forensics::ForensicsEngine;
 use handler::{AegisServer, build_russh_config, IpConnectionGuard};
+use russh::keys::PrivateKey;
 use russh::server::Server;
-use russh_keys::key::KeyPair;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tracing::{error, info, warn};
@@ -24,21 +24,24 @@ use tracing_subscriber::EnvFilter;
 /// throwaway key regenerated every restart — fine for a quick local test,
 /// but a bad idea for a real deployment: a host key that changes across
 /// reconnects is an easy honeypot fingerprint for a returning attacker.
-async fn load_or_create_host_key(path: Option<&str>) -> anyhow::Result<KeyPair> {
+async fn load_or_create_host_key(path: Option<&str>) -> anyhow::Result<PrivateKey> {
     let Some(path) = path else {
         warn!("No host_key_path configured — generating an ephemeral Ed25519 key for this run only");
-        return Ok(KeyPair::generate_ed25519());
+        return generate_ed25519();
     };
     let path_buf = std::path::Path::new(path);
 
     match tokio::fs::read_to_string(path_buf).await {
         Ok(pem) => {
             info!("Loaded persistent SSH host key from {path}");
-            Ok(russh_keys::decode_secret_key(&pem, None)?)
+            // `decode_secret_key` accepts both the PKCS#8 PEM written below and
+            // OpenSSH-format keys, so a key persisted by an earlier build still
+            // loads unchanged across this upgrade.
+            Ok(russh::keys::decode_secret_key(&pem, None)?)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             info!("No host key found at {path} — generating and persisting a new Ed25519 key");
-            let keypair = KeyPair::generate_ed25519();
+            let keypair = generate_ed25519()?;
 
             if let Some(parent) = path_buf.parent() {
                 if !parent.as_os_str().is_empty() {
@@ -46,7 +49,7 @@ async fn load_or_create_host_key(path: Option<&str>) -> anyhow::Result<KeyPair> 
                 }
             }
             let mut pem_bytes = Vec::new();
-            russh_keys::encode_pkcs8_pem(&keypair, &mut pem_bytes)?;
+            russh::keys::encode_pkcs8_pem(&keypair, &mut pem_bytes)?;
             tokio::fs::write(path_buf, &pem_bytes).await?;
             #[cfg(unix)]
             {
@@ -59,8 +62,28 @@ async fn load_or_create_host_key(path: Option<&str>) -> anyhow::Result<KeyPair> 
     }
 }
 
+/// Generate a fresh Ed25519 host key.
+///
+/// russh 0.63 dropped the old `KeyPair::generate_ed25519()` convenience
+/// constructor in favour of `ssh_key`'s explicit-RNG form, so the entropy
+/// source is now named at the call site. `rand::rng()` is the OS-seeded,
+/// thread-local CSPRNG (`ThreadRng: CryptoRng`), which is what a host key
+/// requires.
+fn generate_ed25519() -> anyhow::Result<PrivateKey> {
+    PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
+        .map_err(|e| anyhow::anyhow!("failed to generate Ed25519 host key: {e}"))
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
+    // NOTE on file permissions: every file this process writes that contains
+    // harvested credentials or live malware — the event log, session
+    // recordings, quarantined payloads, the host key — sets mode 0600
+    // explicitly at creation. A process-wide `umask(0o077)` would be a useful
+    // belt-and-braces default, but the only way to set it from Rust is an
+    // `unsafe` libc call, and this crate is deliberately `unsafe`-free.
+    // Set it in the service manager instead (systemd: `UMask=0077`).
+
     // Logging
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -105,11 +128,39 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Forensics engine
-    let forensics = Arc::new(ForensicsEngine::new(
+    let forensics = Arc::new(ForensicsEngine::with_limits(
         &config.forensics.quarantine_dir,
         config.forensics.string_min_len,
+        config.forensics.max_analysis_bytes,
         event_tx.0.clone(),
     ));
+
+    // Reclaim anything a previous run left behind.
+    //
+    // `OverlayMount::drop` covers the in-process case, but a SIGKILL or a host
+    // reboot still strands session directories — and the artifacts inside them
+    // are the honeypot's actual product, so they get analysed before cleanup
+    // rather than silently deleted.
+    {
+        let overlay_base = std::path::Path::new(&config.vmm.overlay_base);
+        for (session_id, upper) in aegis_vmm::reclaim_orphaned_sessions(overlay_base).await {
+            let meta = aegis_common::SessionMeta {
+                session_id: aegis_common::SessionId(session_id.clone()),
+                // The source address is not recoverable from the directory
+                // alone; the session id still ties this back to whatever the
+                // event log recorded for it.
+                client_ip: std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+                client_port: 0,
+                start_ts: chrono::Utc::now(),
+            };
+            if let Err(e) = forensics.analyze_upperdir(&upper, &meta).await {
+                warn!("Forensics on orphaned session {session_id} failed: {e}");
+            }
+            if let Some(session_dir) = upper.parent() {
+                let _ = tokio::fs::remove_dir_all(session_dir).await;
+            }
+        }
+    }
 
     // eBPF probes (requires CAP_BPF / root)
     let session_map = std::sync::Arc::new(

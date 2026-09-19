@@ -146,9 +146,20 @@ fn extract_iocs(strings: &[String]) -> IocFindings {
 // ForensicsEngine
 // ---------------------------------------------------------------------------
 
+/// Default ceiling on a file read whole into memory for analysis, used when a
+/// caller doesn't specify one.
+///
+/// String extraction allocates an owned `String` per printable run and
+/// `extract_iocs` then joins them all into a single haystack, so peak memory is
+/// roughly 3-4x the file size. An attacker chooses that size (drop a large file
+/// via `wget`, disconnect cleanly, and teardown analyses it), so it needs a
+/// bound.
+pub const DEFAULT_MAX_ANALYSIS_BYTES: u64 = 32 * 1024 * 1024;
+
 pub struct ForensicsEngine {
     quarantine_dir: PathBuf,
     string_min_len: usize,
+    max_analysis_bytes: u64,
     event_tx: mpsc::Sender<TelemetryEvent>,
 }
 
@@ -158,9 +169,24 @@ impl ForensicsEngine {
         string_min_len: usize,
         event_tx: mpsc::Sender<TelemetryEvent>,
     ) -> Self {
+        Self::with_limits(
+            quarantine_dir,
+            string_min_len,
+            DEFAULT_MAX_ANALYSIS_BYTES,
+            event_tx,
+        )
+    }
+
+    pub fn with_limits(
+        quarantine_dir: impl AsRef<Path>,
+        string_min_len: usize,
+        max_analysis_bytes: u64,
+        event_tx: mpsc::Sender<TelemetryEvent>,
+    ) -> Self {
         Self {
             quarantine_dir: quarantine_dir.as_ref().to_path_buf(),
             string_min_len,
+            max_analysis_bytes,
             event_tx,
         }
     }
@@ -200,6 +226,18 @@ impl ForensicsEngine {
         path: &Path,
         meta: &SessionMeta,
     ) -> AegisResult<bool> {
+        // Check the size before reading: `fs::read` on a multi-gigabyte drop
+        // would allocate it whole, and string extraction multiplies that again.
+        let declared_size = fs::metadata(path).await.map_or(0, |m| m.len());
+        if declared_size > self.max_analysis_bytes {
+            warn!(
+                "Skipping deep analysis of {} ({declared_size} bytes exceeds the {} byte cap)",
+                path.display(),
+                self.max_analysis_bytes
+            );
+            return Ok(false);
+        }
+
         let data = fs::read(path).await?;
         if data.is_empty() {
             return Ok(false);

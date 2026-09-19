@@ -2,6 +2,10 @@
 name = "aegis-gateway"
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
+license.workspace = true
+# Internal workspace crate — never published to crates.io.
+publish = false
 
 [[bin]]
 name = "aegis-gateway"
@@ -15,8 +19,7 @@ aegis-forensics = { path = "../aegis-forensics" }
 aegis-ebpf      = { path = "../aegis-ebpf" }
 tokio           = { workspace = true }
 russh           = { workspace = true }
-russh-keys      = { workspace = true }
-async-trait     = { workspace = true }
+rand            = { workspace = true }
 serde           = { workspace = true }
 serde_json      = { workspace = true }
 tracing         = { workspace = true }

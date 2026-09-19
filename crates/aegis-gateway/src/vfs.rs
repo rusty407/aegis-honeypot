@@ -152,8 +152,17 @@ impl VirtualFileSystem {
             let rest = path.trim_start_matches('~').trim_start_matches('/');
             if !rest.is_empty() {
                 for comp in rest.split('/') {
-                    if !comp.is_empty() && comp != "." {
-                        p.push(comp.to_owned());
+                    match comp {
+                        "" | "." => {}
+                        // Normalise `..` here too. `resolve_disk_path_base`
+                        // drops `..` components before touching the filesystem
+                        // so this was never exploitable, but leaving the two
+                        // paths disagreeing about what a path *means* made the
+                        // safety depend entirely on that downstream filter.
+                        ".." => {
+                            p.pop();
+                        }
+                        c => p.push(c.to_owned()),
                     }
                 }
             }
@@ -565,8 +574,16 @@ impl VirtualFileSystem {
 
     pub fn rm(&mut self, args: &str) -> String {
         let tokens: Vec<&str> = args.split_whitespace().collect();
-        let recursive = tokens.iter().any(|t| t.contains('r') || t.contains('R'));
-        let force = tokens.iter().any(|t| t.contains('f'));
+        // Only inspect tokens that are actually flags. Scanning *every* token
+        // for the character meant `rm report` was treated as `rm -r report`
+        // and `rm config` as `rm -f config` — so an attacker (or a clumsy one)
+        // could recursively delete a tree of artifacts that forensics would
+        // otherwise have analysed at teardown, and the divergence from real
+        // `rm` behaviour is itself observable.
+        let recursive = tokens
+            .iter()
+            .any(|t| t.starts_with('-') && (t.contains('r') || t.contains('R')));
+        let force = tokens.iter().any(|t| t.starts_with('-') && t.contains('f'));
         let targets: Vec<&str> = tokens.iter().filter(|t| !t.starts_with('-')).copied().collect();
 
         if targets.is_empty() {

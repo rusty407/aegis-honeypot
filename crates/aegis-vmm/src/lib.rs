@@ -1,66 +1,26 @@
-//! `aegis-vmm` — Ephemeral sandbox orchestrator.
+//! `aegis-vmm` — Ephemeral per-session sandbox orchestrator.
 //!
-//! Spawns isolated Linux namespace sandboxes with OverlayFS-backed rootfs mounts.
-//! Each session gets its own PTY, PID/Net/Mount/UTS namespaces, and private `upperdir`.
-//! On teardown, the OverlayFS mount is unmounted and the `upperdir` containing all
-//! attacker-created or modified artifacts is passed to `aegis-forensics` for analysis.
+//! Each session gets a private OverlayFS layer over the read-only golden
+//! rootfs: its own `upperdir` and `workdir`, mounted `nodev,nosuid,noexec`.
+//! On teardown the mount is released and the `upperdir` — everything the
+//! attacker created or modified — is handed to `aegis-forensics`.
 //!
-//! **Zero-execution guarantee**: The virtual shell dispatcher runs within the scope
-//! of the session's mount root, safely capturing dropped files without running
-//! malicious commands on the host OS.
+//! **What this does and does not isolate.** The containment property here is
+//! *zero execution*, not namespaces: the virtual shell is a pure dispatcher
+//! that never runs attacker input, so there is no process to confine. No PTY
+//! is allocated, no child is forked, and no namespace is unshared — earlier
+//! revisions claimed all three and delivered none of them, which is worse than
+//! not claiming them, because it invites code to rely on a boundary that does
+//! not exist. If real command execution is ever introduced, that isolation has
+//! to be built here first.
 
 pub mod rootfs;
 
-use aegis_common::{AegisError, AegisResult, SessionMeta};
-use std::os::fd::RawFd;
+use aegis_common::{AegisResult, SessionMeta};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tracing::{debug, info, warn};
-
-// ---------------------------------------------------------------------------
-// PTY Helpers (wraps libc openpty / posix_openpt)
-// ---------------------------------------------------------------------------
-
-/// A master/slave PTY pair.
-pub struct PtyPair {
-    pub master_fd: RawFd,
-    pub slave_fd: RawFd,
-}
-
-impl PtyPair {
-    /// Open a new PTY pair using `posix_openpt` / `grantpt` / `unlockpt`.
-    pub fn open() -> AegisResult<Self> {
-        use nix::fcntl::OFlag;
-        use nix::pty::{grantpt, posix_openpt, unlockpt};
-
-        let master = posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY)
-            .map_err(|e| AegisError::Sandbox(format!("posix_openpt: {e}")))?;
-
-        grantpt(&master)
-            .map_err(|e| AegisError::Sandbox(format!("grantpt: {e}")))?;
-        unlockpt(&master)
-            .map_err(|e| AegisError::Sandbox(format!("unlockpt: {e}")))?;
-
-        let slave_name = unsafe {
-            nix::pty::ptsname(&master)
-                .map_err(|e| AegisError::Sandbox(format!("ptsname: {e}")))?
-        };
-
-        let slave_fd = nix::fcntl::open(
-            slave_name.as_str(),
-            OFlag::O_RDWR,
-            nix::sys::stat::Mode::empty(),
-        )
-        .map_err(|e| AegisError::Sandbox(format!("open slave pty: {e}")))?;
-
-        use std::os::unix::io::IntoRawFd;
-        Ok(PtyPair {
-            master_fd: master.into_raw_fd(),
-            slave_fd,
-        })
-    }
-}
+use tracing::{info, warn};
 
 // ---------------------------------------------------------------------------
 // OverlayFS Mount Manager
@@ -99,16 +59,30 @@ impl OverlayMount {
         let work_str = work.to_string_lossy();
         let mount_str = mount.to_string_lossy();
 
+        // `redirect_dir`/`metacopy` off: both are copy-up optimisations that
+        // complicate what the upperdir actually contains, and forensics reads
+        // the upperdir directly after teardown. Straightforward copy-up keeps
+        // captured artifacts whole.
         let options = format!(
-            "lowerdir={lower_str},upperdir={upper_str},workdir={work_str}"
+            "lowerdir={lower_str},upperdir={upper_str},workdir={work_str},redirect_dir=off,metacopy=off"
         );
 
-        // Attempt Linux kernel OverlayFS mount syscall
+        // Attempt Linux kernel OverlayFS mount syscall.
+        //
+        // nodev/nosuid/noexec are defense in depth: nothing in the current
+        // zero-execution design ever executes from this mount, but the mount is
+        // performed by a CAP_SYS_ADMIN process over a lowerdir that lives on
+        // the host filesystem, and attacker-downloaded payloads get written
+        // into it. These flags cost nothing and remove the setuid/device/exec
+        // primitives entirely if that ever changes.
+        let flags = nix::mount::MsFlags::MS_NODEV
+            | nix::mount::MsFlags::MS_NOSUID
+            | nix::mount::MsFlags::MS_NOEXEC;
         let mount_res = nix::mount::mount(
             Some("overlay"),
             mount_str.as_ref(),
             Some("overlay"),
-            nix::mount::MsFlags::empty(),
+            flags,
             Some(options.as_str()),
         );
 
@@ -157,6 +131,32 @@ impl OverlayMount {
     }
 }
 
+impl Drop for OverlayMount {
+    /// Last-resort unmount.
+    ///
+    /// `teardown()` is only reached on a clean channel close or an explicit
+    /// `exit`. Any session that ends abruptly — TCP reset, idle timeout, a
+    /// panic in the handler — previously dropped this struct with the mount
+    /// still live and the session directory still on disk, leaking both
+    /// permanently. (34 orphaned session directories were found on the audited
+    /// host, against a single cleanly-closed session.)
+    ///
+    /// A blocking `umount` in `Drop` is the right trade here: it is one fast
+    /// syscall, and the alternative is leaking a kernel mount. `teardown()`
+    /// clears `is_mounted`, so this is a no-op on the clean path.
+    fn drop(&mut self) {
+        if !self.is_mounted {
+            return;
+        }
+        let mount_str = self.mount_point.to_string_lossy().into_owned();
+        match nix::mount::umount(mount_str.as_str()) {
+            Ok(()) => info!("OverlayFS unmounted on drop: {mount_str}"),
+            Err(e) => warn!("umount on drop failed for {mount_str}: {e}"),
+        }
+        self.is_mounted = false;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Sandbox Handle — bidirectional async PTY & Mount Lifecycle
 // ---------------------------------------------------------------------------
@@ -202,6 +202,65 @@ impl SandboxHandle {
 }
 
 // ---------------------------------------------------------------------------
+// Startup Reconciliation
+// ---------------------------------------------------------------------------
+
+/// Reclaim session directories left behind by a previous run.
+///
+/// Even with `Drop` handling the in-process case, a `SIGKILL` or a host reboot
+/// leaves `session_*` directories — and possibly live mounts — behind. Returns
+/// `(session_id, upper_dir)` for each orphan so the caller can run forensics
+/// over artifacts that would otherwise be silently discarded, which is the more
+/// important half: those upperdirs are the honeypot's actual product.
+///
+/// Unmounting is best-effort; `umount` on a path that is not a mount point
+/// simply fails, which is the expected case for a directory-only fallback.
+pub async fn reclaim_orphaned_sessions(overlay_base: &Path) -> Vec<(String, PathBuf)> {
+    let mut orphans = Vec::new();
+
+    let Ok(mut entries) = fs::read_dir(overlay_base).await else {
+        return orphans;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let Some(session_id) = name.strip_prefix("session_") else {
+            continue;
+        };
+        if !entry.file_type().await.is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+
+        let mount_point = path.join("mount");
+        if mount_point.is_dir() {
+            let mount_str = mount_point.to_string_lossy().into_owned();
+            if nix::mount::umount(mount_str.as_str()).is_ok() {
+                info!("Unmounted orphaned OverlayFS mount: {mount_str}");
+            }
+        }
+
+        let upper = path.join("upper");
+        if upper.is_dir() {
+            orphans.push((session_id.to_owned(), upper));
+        } else {
+            // Nothing recoverable — drop the whole directory.
+            let _ = fs::remove_dir_all(&path).await;
+        }
+    }
+
+    if !orphans.is_empty() {
+        warn!(
+            "Found {} orphaned session director{} from a previous run — running forensics before cleanup",
+            orphans.len(),
+            if orphans.len() == 1 { "y" } else { "ies" }
+        );
+    }
+    orphans
+}
+
+// ---------------------------------------------------------------------------
 // Sandbox Spawner
 // ---------------------------------------------------------------------------
 
@@ -237,12 +296,22 @@ pub async fn spawn_sandbox(
         lower_dir.to_path_buf()
     };
 
-    // 3. Unshare namespaces if permissions allow
-    let unshare_flags = libc::CLONE_NEWUTS | libc::CLONE_NEWPID;
-    let ret = unsafe { libc::unshare(unshare_flags) };
-    if ret != 0 {
-        debug!("unshare returned {ret} — operating with userspace mount isolation");
-    }
+    // NOTE: there is deliberately no `unshare()` here any more.
+    //
+    // The previous code called `unshare(CLONE_NEWUTS | CLONE_NEWPID)` once per
+    // session and achieved nothing while doing real harm. `CLONE_NEWPID` does
+    // not move the caller into a new PID namespace — it only affects future
+    // children, and this function forks none. `CLONE_NEWUTS` applies to the
+    // *calling thread*, which is whichever tokio worker happened to run the
+    // connection, so unrelated sessions sharing that worker inherited divergent
+    // namespace state for the rest of the process lifetime.
+    //
+    // The isolation this design actually provides is: a per-session directory,
+    // plus the fact that nothing is ever executed. That is a defensible
+    // architecture; it just isn't namespace isolation, and pretending otherwise
+    // invited future code to rely on a boundary that was never there. If real
+    // command execution is ever added, the unshare must happen in a forked
+    // child before `exec` — never on a shared runtime thread.
 
     Ok(SandboxHandle {
         master: None,

@@ -33,9 +33,25 @@ const EVENT_EXECVE: u32 = 1;
 const EVENT_CONNECT: u32 = 2;
 const EVENT_MEMFD: u32 = 3;
 
-// Shared RingBuf map — 4 MB
+// Shared RingBuf map — 4 MB (~10k events at ~408 bytes each)
 #[map]
 static KERNEL_EVENTS: RingBuf = RingBuf::with_byte_size(4 * 1024 * 1024, 0);
+
+/// Count of events dropped because the ring buffer was full.
+///
+/// `reserve()` returning `None` was previously ignored entirely, so under an
+/// execve flood telemetry was lost with no record of the loss — leaving the
+/// operator unable to tell "quiet" from "overwhelmed", which is the more
+/// dangerous of the two. Userspace reads index 0 to surface the count.
+#[map]
+static DROPPED_EVENTS: aya_ebpf::maps::Array<u64> = aya_ebpf::maps::Array::with_max_entries(1, 0);
+
+/// Record one dropped event.
+unsafe fn note_drop() {
+    if let Some(slot) = DROPPED_EVENTS.get_ptr_mut(0) {
+        *slot += 1;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // sys_enter_execve — binary execution tracking
@@ -54,7 +70,7 @@ pub fn handle_execve(ctx: TracePointContext) -> u32 {
 unsafe fn try_execve(ctx: &TracePointContext) -> Option<u32> {
     let mut event = KernelEvent {
         event_type: EVENT_EXECVE,
-        pid: helpers::bpf_get_current_pid_tgid() as u32,
+        pid: (helpers::bpf_get_current_pid_tgid() >> 32) as u32,
         ppid: 0,
         uid: helpers::bpf_get_current_uid_gid() as u32,
         ns_pid: 0,
@@ -79,10 +95,11 @@ unsafe fn try_execve(ctx: &TracePointContext) -> Option<u32> {
         let _ = helpers::bpf_probe_read_user_str_bytes(arg0_ptr as *const u8, &mut event.argv);
     }
 
-    let size = core::mem::size_of::<KernelEvent>();
     if let Some(buf) = KERNEL_EVENTS.reserve::<KernelEvent>(0) {
         core::ptr::write_unaligned(buf.as_mut_ptr(), event);
         buf.submit(0);
+    } else {
+        note_drop();
     }
 
     Some(0)
@@ -112,17 +129,17 @@ pub fn handle_connect(ctx: TracePointContext) -> u32 {
 
 unsafe fn try_connect(ctx: &TracePointContext) -> Option<u32> {
     let sockaddr_ptr: u64 = ctx.read_at(16).ok()?;
+    if sockaddr_ptr == 0 {
+        return Some(0);
+    }
 
-    let mut sa = SockaddrIn {
-        sin_family: 0,
-        sin_port: 0,
-        sin_addr: 0,
-        _pad: [0u8; 8],
-    };
-
-    helpers::bpf_probe_read_user(
-        &mut sa as *mut SockaddrIn,
-    ).ok()?;
+    // Read from the syscall's `sockaddr` pointer.
+    //
+    // The previous version read the *local* `sa` variable's own address and
+    // discarded the helper's return value, so `sa` stayed all-zero, the
+    // `sin_family != 2` check below always tripped, and this probe could never
+    // emit a single event. The C2-detection probe was dead on arrival.
+    let sa: SockaddrIn = helpers::bpf_probe_read_user(sockaddr_ptr as *const SockaddrIn).ok()?;
 
     // AF_INET = 2 — only track IPv4 outbound
     if sa.sin_family != 2 {
@@ -131,7 +148,7 @@ unsafe fn try_connect(ctx: &TracePointContext) -> Option<u32> {
 
     let event = KernelEvent {
         event_type: EVENT_CONNECT,
-        pid: helpers::bpf_get_current_pid_tgid() as u32,
+        pid: (helpers::bpf_get_current_pid_tgid() >> 32) as u32,
         ppid: 0,
         uid: helpers::bpf_get_current_uid_gid() as u32,
         ns_pid: 0,
@@ -145,6 +162,8 @@ unsafe fn try_connect(ctx: &TracePointContext) -> Option<u32> {
     if let Some(buf) = KERNEL_EVENTS.reserve::<KernelEvent>(0) {
         core::ptr::write_unaligned(buf.as_mut_ptr(), event);
         buf.submit(0);
+    } else {
+        note_drop();
     }
 
     Some(0)
@@ -168,7 +187,7 @@ unsafe fn try_memfd(ctx: &TracePointContext) -> Option<u32> {
 
     let mut event = KernelEvent {
         event_type: EVENT_MEMFD,
-        pid: helpers::bpf_get_current_pid_tgid() as u32,
+        pid: (helpers::bpf_get_current_pid_tgid() >> 32) as u32,
         ppid: 0,
         uid: helpers::bpf_get_current_uid_gid() as u32,
         ns_pid: 0,
@@ -184,6 +203,8 @@ unsafe fn try_memfd(ctx: &TracePointContext) -> Option<u32> {
     if let Some(buf) = KERNEL_EVENTS.reserve::<KernelEvent>(0) {
         core::ptr::write_unaligned(buf.as_mut_ptr(), event);
         buf.submit(0);
+    } else {
+        note_drop();
     }
 
     Some(0)

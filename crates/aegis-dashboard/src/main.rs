@@ -44,6 +44,10 @@ const POLL_INTERVAL: Duration = Duration::from_millis(1500);
 /// `Lagged` error, which the stream handler silently skips past) rather than
 /// blocking the tailer — the stream is a live feed, not a delivery guarantee.
 const BROADCAST_CAPACITY: usize = 1024;
+/// Largest `.cast` body served in one response (see `session_cast`).
+const MAX_CAST_RESPONSE_BYTES: u64 = 32 * 1024 * 1024;
+/// Largest slice of `attacks.json` ingested in a single tailer poll.
+const MAX_TAIL_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Clone)]
 struct AppState {
@@ -96,9 +100,16 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/stream", get(stream))
         .route("/api/session/:id", get(session_timeline))
         .route("/api/session/:id/cast", get(session_cast))
+        .route("/api/sessions", get(sessions))
+        .route("/api/geo", get(geo))
+        .route("/api/iocs", get(iocs))
+        .route("/api/known", get(known))
         // `.layer` (not `.route_layer`) so every path — including a 404
         // fallback — goes through auth; nothing is reachable unauthenticated.
         .layer(middleware::from_fn_with_state(state.clone(), require_auth))
+        // Outermost, so the headers are present on 401s and 404s too — not
+        // just on responses that made it through auth.
+        .layer(middleware::from_fn(security_headers))
         .with_state(state.clone());
 
     let bind_addr = format!("{}:{}", config.dashboard.bind_addr, config.dashboard.port);
@@ -165,6 +176,48 @@ fn generate_token() -> String {
     hex::encode(bytes)
 }
 
+/// Response headers applied to everything the dashboard serves.
+///
+/// The page renders attacker-typed commands, usernames and passwords. Every
+/// render path escapes correctly today, but they are hand-escaped string
+/// concatenations into `innerHTML`, which is the pattern that regresses — and
+/// the bearer token lives in `localStorage`, readable by any script in the
+/// origin. `connect-src 'self'` is the load-bearing directive: it does not
+/// prevent an injection, it prevents a successful one from shipping the stolen
+/// token anywhere. `'unsafe-inline'` is required while the page keeps its
+/// single inline `<script>`/`<style>`; moving those to separate files under a
+/// nonce is the stronger end state.
+async fn security_headers(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        header::HeaderValue::from_static(
+            "default-src 'self'; \
+             script-src 'self' 'unsafe-inline'; \
+             style-src 'self' 'unsafe-inline'; \
+             img-src 'self' data:; \
+             connect-src 'self'; \
+             frame-ancestors 'none'; \
+             base-uri 'none'; \
+             form-action 'none'",
+        ),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        header::HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::REFERRER_POLICY,
+        header::HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        header::X_FRAME_OPTIONS,
+        header::HeaderValue::from_static("DENY"),
+    );
+    response
+}
+
 /// Bearer-token auth, checked via `Authorization: Bearer <token>` or a
 /// `?token=` query param (needed for `/api/stream`, since browsers'
 /// `EventSource` can't set custom headers). Applied to every route via
@@ -182,7 +235,17 @@ async fn require_auth(State(state): State<AppState>, request: Request, next: Nex
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
 
-    let provided = header_token.map(str::to_owned).or_else(|| query_token(request.uri()));
+    // A token in a URL ends up in reverse-proxy access logs, browser history,
+    // `Referer` headers and CDN cache keys — none of which have the 0600
+    // permissions and retention of the token file itself. The `EventSource`
+    // API genuinely cannot set request headers, and the page itself has to be
+    // reachable to bootstrap, so the query fallback is scoped to exactly those
+    // two paths instead of being accepted on every route.
+    let path = request.uri().path();
+    let query_allowed = path == "/" || path == "/api/stream";
+    let provided = header_token
+        .map(str::to_owned)
+        .or_else(|| query_allowed.then(|| query_token(request.uri())).flatten());
 
     match provided {
         Some(token) if constant_time_eq(&token, &state.token) => Ok(next.run(request).await),
@@ -257,8 +320,16 @@ async fn read_new_lines(path: &PathBuf, offset: &mut u64) -> std::io::Result<Vec
     }
 
     file.seek(std::io::SeekFrom::Start(*offset)).await?;
-    let mut buf = Vec::with_capacity((len - *offset) as usize);
-    file.read_to_end(&mut buf).await?;
+    // Read at most one chunk per poll. `Vec::with_capacity(len - offset)` meant
+    // a single allocation the size of the unread tail — which on startup is the
+    // *entire* log, and during an attack is however much the gateway wrote in
+    // the last poll interval. Catching up incrementally costs a few extra
+    // ticks and bounds the allocation.
+    let want = (len - *offset).min(MAX_TAIL_CHUNK_BYTES);
+    let mut buf = Vec::with_capacity(want as usize);
+    tokio::io::AsyncReadExt::take(&mut file, want)
+        .read_to_end(&mut buf)
+        .await?;
 
     let Some(last_newline) = buf.iter().rposition(|&b| b == b'\n') else {
         // No complete line yet; leave offset untouched and try again next tick.
@@ -346,10 +417,71 @@ async fn session_cast(State(state): State<AppState>, Path(id): Path<String>) -> 
         return (StatusCode::BAD_REQUEST, String::new());
     }
     let path = state.sessions_dir.join(format!("{id}.cast"));
-    match tokio::fs::read_to_string(&path).await {
-        Ok(content) => (StatusCode::OK, content),
-        Err(_) => (StatusCode::NOT_FOUND, String::new()),
+    let file = match tokio::fs::File::open(&path).await {
+        Ok(f) => f,
+        Err(_) => return (StatusCode::NOT_FOUND, String::new()),
+    };
+
+    // Bounded read. The gateway caps recording size, but this endpoint also
+    // serves files written before that cap existed — and an operator clicking
+    // an oversized session to investigate it should not be the thing that
+    // OOM-kills their monitoring. A truncated replay still plays.
+    let mut buf = Vec::new();
+    if tokio::io::AsyncReadExt::take(file, MAX_CAST_RESPONSE_BYTES)
+        .read_to_end(&mut buf)
+        .await
+        .is_err()
+    {
+        return (StatusCode::INTERNAL_SERVER_ERROR, String::new());
     }
+    // `.cast` is newline-delimited JSON; a truncated tail would be a partial
+    // line, which the client-side parser skips, so lossy UTF-8 is safe here.
+    (StatusCode::OK, String::from_utf8_lossy(&buf).into_owned())
+}
+
+#[derive(Deserialize)]
+struct SessionsQuery {
+    q: Option<String>,
+    ip: Option<std::net::IpAddr>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+}
+
+const MAX_SESSIONS_LIMIT: usize = 200;
+
+#[derive(serde::Serialize)]
+struct SessionsResponse {
+    total: usize,
+    sessions: Vec<store::SessionSummary>,
+}
+
+/// Session archive (drill-down list), independent of the recent-events ring
+/// buffer — see `Store::sessions`. Supports a free-text search (`q`, matched
+/// against session id / IP / username / password) plus an exact IP filter
+/// and offset-based pagination.
+async fn sessions(State(state): State<AppState>, Query(q): Query<SessionsQuery>) -> impl IntoResponse {
+    let limit = q.limit.unwrap_or(50).min(MAX_SESSIONS_LIMIT);
+    let offset = q.offset.unwrap_or(0);
+    let store = state.store.read().await;
+    let (sessions, total) = store.sessions(q.q.as_deref(), q.ip, limit, offset);
+    Json(SessionsResponse { total, sessions })
+}
+
+/// Bucketed session-origin points for the geo map — see `Store::geo_points`.
+async fn geo(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.store.read().await.geo_points())
+}
+
+/// All-time distinct IOC rollup across every captured payload — see
+/// `Store::ioc_rollup`.
+async fn iocs(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.store.read().await.ioc_rollup())
+}
+
+/// Every distinct username/password/command ever seen, for the frontend to
+/// flag first-ever occurrences client-side — see `Store::known_values`.
+async fn known(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.store.read().await.known_values())
 }
 
 #[cfg(test)]

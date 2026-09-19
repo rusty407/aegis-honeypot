@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+# Internal workspace crate — never published to crates.io.
+publish = false
 
 [dependencies]
 aegis-common = { path = "../aegis-common" }

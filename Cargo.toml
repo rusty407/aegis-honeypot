@@ -19,8 +19,18 @@ license = "MIT"
 [workspace.dependencies]
 tokio              = { version = "1", features = ["full"] }
 tokio-util         = { version = "0.7", features = ["codec", "io"] }
-russh              = "0.46"
-russh-keys         = "0.46"
+# russh 0.46 carried 12 published advisories (5 High, several pre-auth remote)
+# on the single most exposed component in the system. 0.63 clears all of them.
+russh              = "0.63"
+# `russh-keys` no longer exists as a separate crate — it was folded into
+# `russh::keys` at 0.50 and the standalone crate was abandoned at 0.50.0-beta.
+#
+# `rand` is a *direct* dependency only because russh 0.63 removed the
+# `KeyPair::generate_ed25519()` helper; generating the persistent host key now
+# needs an RNG passed in explicitly. It was already in the tree (russh depends
+# on it), so this adds no new third-party code — only a direct declaration, and
+# the version is pinned to match russh's so the two cannot diverge.
+rand               = "0.10"
 aya                = { version = "0.13", features = ["async_tokio"] }
 aya-log            = "0.2"
 serde              = { version = "1", features = ["derive"] }

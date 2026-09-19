@@ -2,13 +2,16 @@
 name = "aegis-vmm"
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
+license.workspace = true
+# Internal workspace crate — never published to crates.io.
+publish = false
 
 [dependencies]
 aegis-common    = { path = "../aegis-common" }
 aegis-forensics = { path = "../aegis-forensics" }
 tokio           = { workspace = true }
 nix             = { workspace = true }
-libc            = { workspace = true }
 tracing         = { workspace = true }
 anyhow          = { workspace = true }
 bytes           = { workspace = true }
