@@ -171,16 +171,33 @@ fn parse_redirect(cmd: &str) -> Option<(&str, &str, &str)> {
 }
 
 fn dispatch_pure(cmd: &str, vfs: &mut VirtualFileSystem) -> String {
+    // `sudo` passthrough — strip every leading `sudo` prefix.
+    //
+    // This is deliberately a loop and not the recursive re-dispatch it
+    // replaces. Recursion grew the stack by one frame per prefix, and the
+    // command line is attacker-controlled, so `("sudo " * 100000) + "id"`
+    // overflowed the stack. A Rust stack overflow is *not* a catchable panic:
+    // it aborts the whole process, taking every concurrent session, the
+    // collector and the event pipeline with it. Iterating is O(n) time and
+    // O(1) stack, so the only bound needed is on input length — which
+    // `ActiveSession::data` now enforces via `MAX_COMMAND_LEN`.
+    let mut cmd = cmd;
+    loop {
+        cmd = match cmd.strip_prefix("sudo") {
+            // Bare `sudo` with nothing after it, same as the old recursion
+            // bottoming out on an empty argument string.
+            Some(rest) if rest.is_empty() => "",
+            Some(rest) if rest.starts_with(' ') => rest.trim_start(),
+            // Not actually `sudo` (e.g. `sudoedit`) — stop stripping.
+            _ => break,
+        };
+    }
+
     if cmd.is_empty() { return String::new(); }
 
     let parts: Vec<&str> = cmd.splitn(2, ' ').collect();
     let prog = parts[0];
     let args = parts.get(1).copied().unwrap_or("");
-
-    // sudo passthrough — strip "sudo " and re-dispatch
-    if prog == "sudo" {
-        return dispatch_pure(args, vfs);
-    }
 
     match prog {
         "pwd"       => vfs.pwd(),
@@ -191,15 +208,22 @@ fn dispatch_pure(cmd: &str, vfs: &mut VirtualFileSystem) -> String {
         "touch"     => vfs.touch(args),
         "rm"        => vfs.rm(args),
         "echo"      => {
-            // Strip only surrounding matching quotes from the whole arg string
+            // Strip only surrounding matching quotes from the whole arg string.
+            //
+            // The `len() >= 2` guard is load-bearing: for a *single* quote
+            // character both `starts_with` and `ends_with` match the same byte,
+            // making the slice `&s[1..0]` — an inverted range, which panics.
+            // `echo "` was a one-command remote crash of the session handler.
             let s = args.trim();
-            let s = if (s.starts_with('"') && s.ends_with('"')) ||
-                       (s.starts_with('\'') && s.ends_with('\'')) {
-                &s[1..s.len()-1]
+            let s = if s.len() >= 2
+                && ((s.starts_with('"') && s.ends_with('"'))
+                    || (s.starts_with('\'') && s.ends_with('\'')))
+            {
+                &s[1..s.len() - 1]
             } else {
                 s
             };
-            format!("{}\r\n", s)
+            format!("{s}\r\n")
         }
         "whoami"    => "root\r\n".into(),
         "id"        => "uid=0(root) gid=0(root) groups=0(root)\r\n".into(),
@@ -352,6 +376,69 @@ fn dispatch_pure(cmd: &str, vfs: &mut VirtualFileSystem) -> String {
             } else {
                 format!("bash: {}: command not found\r\n", prog)
             }
+        }
+    }
+}
+
+
+#[cfg(test)]
+mod hostile_input_tests {
+    use super::dispatch;
+    use crate::vfs::VirtualFileSystem;
+
+    /// A single quote character made `echo` slice `&s[1..0]` — an inverted
+    /// range, which panics and kills the session handler. `echo "` is
+    /// something a clumsy human types, not an exotic payload.
+    #[test]
+    fn echo_with_one_quote_does_not_panic() {
+        let mut vfs = VirtualFileSystem::default();
+        for probe in ["echo \"", "echo '", "echo \"\"", "echo ''", "echo \"a", "echo '"] {
+            let out = dispatch(probe, &mut vfs);
+            assert!(out.ends_with("\r\n"), "{probe:?} produced {out:?}");
+        }
+    }
+
+    #[test]
+    fn echo_still_strips_real_matching_quotes() {
+        let mut vfs = VirtualFileSystem::default();
+        assert_eq!(dispatch("echo \"hi\"", &mut vfs), "hi\r\n");
+        assert_eq!(dispatch("echo 'hi'", &mut vfs), "hi\r\n");
+        assert_eq!(dispatch("echo plain", &mut vfs), "plain\r\n");
+    }
+
+    /// The `sudo` passthrough used to recurse once per prefix. Because the
+    /// command buffer is attacker-controlled, that let a single command
+    /// overflow the stack — which aborts the whole process, since a stack
+    /// overflow is not a catchable panic. A depth that previously aborted
+    /// must now return normally.
+    #[test]
+    fn deeply_stacked_sudo_does_not_overflow_the_stack() {
+        let mut vfs = VirtualFileSystem::default();
+        let cmd = "sudo ".repeat(200_000) + "whoami";
+        assert_eq!(dispatch(&cmd, &mut vfs), "root\r\n");
+    }
+
+    #[test]
+    fn sudo_passthrough_still_works_normally() {
+        let mut vfs = VirtualFileSystem::default();
+        assert_eq!(dispatch("sudo whoami", &mut vfs), "root\r\n");
+        assert_eq!(dispatch("sudo sudo id", &mut vfs), "uid=0(root) gid=0(root) groups=0(root)\r\n");
+        assert_eq!(dispatch("sudo", &mut vfs), "");
+        // `sudoedit` is not `sudo` — the prefix strip must not eat it.
+        assert!(dispatch("sudoedit /etc/passwd", &mut vfs).contains("command not found"));
+    }
+
+    /// Nothing the dispatcher is handed may panic, whatever it contains.
+    #[test]
+    fn assorted_hostile_commands_do_not_panic() {
+        let mut vfs = VirtualFileSystem::default();
+        for probe in [
+            "echo \"", "echo '", ">", ">>", "> >", "a > ", ">>>", "cd ~/../../../../etc",
+            "rm", "rm -", "mkdir", "touch", "cat", "wc", "head", "tail",
+            "ls -", "uname -", "systemctl status", "which", "\u{7f}", ";;;", "; ; ;",
+            "echo a; echo b", "echo x > /tmp/f", "sudo sudo sudo",
+        ] {
+            let _ = dispatch(probe, &mut vfs);
         }
     }
 }

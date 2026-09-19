@@ -1,0 +1,67 @@
+# cargo-deny policy for aegis-honeypot.
+#
+# Run with `cargo deny check`. The `advisories` section is the one that matters
+# operationally: this is an internet-facing daemon whose most exposed dependency
+# is its SSH transport, so a stale advisory here is a live exposure, not a
+# hygiene item.
+#
+# NOTE: `cargo audit` and this section both read the RustSec database, which
+# mirrors only a subset of the GitHub Advisory Database. At the time this file
+# was added, RustSec carried 2 advisories for `russh` while GHSA carried 12
+# applicable to the pinned version. Pair this with an OSV/GHSA-backed scanner
+# (e.g. `osv-scanner`) in CI rather than treating a clean run here as complete.
+
+[graph]
+all-features = true
+
+[advisories]
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+ignore = [
+    # RUSTSEC-2023-0071 — "Marvin Attack": timing sidechannel in the `rsa`
+    # crate's private-key operations (CVSS 5.9). Accepted, deliberately:
+    #
+    #   * There is no fixed version. The advisory has stood unpatched since
+    #     2023; ignoring it is the only alternative to a permanently-red check
+    #     that everyone learns to skip past.
+    #   * It enters via russh's default `rsa` feature (`cargo tree -i rsa`),
+    #     not via anything this codebase calls.
+    #   * It is an attack on RSA *private*-key operations. This honeypot's host
+    #     key is Ed25519, so no RSA private key exists to extract.
+    #   * The feature is kept on purpose rather than disabled: a honeypot wants
+    #     to accept and log every public key an attacker offers, including RSA
+    #     ones, and those fingerprints are among the better signals for
+    #     correlating one actor across source IPs. Turning the feature off
+    #     would make RSA pubkey attempts fail to parse and cost real telemetry.
+    #
+    # Revisit if an RSA *host* key is ever added (see AEG-009 / HASSH work),
+    # because that would put a real RSA private key on the signing path.
+    "RUSTSEC-2023-0071",
+]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# The workspace's own crates depend on each other by path with no version
+# requirement, which is correct and not what the wildcard check is for.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

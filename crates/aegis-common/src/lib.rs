@@ -394,6 +394,58 @@ pub struct ForensicsConfig {
     pub sessions_dir: String,
     pub attacks_log: String,
     pub string_min_len: usize,
+
+    /// Whether to actually fetch URLs seen in an attacker's `wget`/`curl`
+    /// commands.
+    ///
+    /// This is the honeypot's only outbound network activity, and it is
+    /// entirely attacker-directed: the *sandbox* has no network, but with this
+    /// on, the gateway makes HTTP requests of the attacker's choosing from the
+    /// host's own address and ASN. That is what makes payload capture work —
+    /// and also what makes the honeypot usable as a request relay, for
+    /// attribution laundering, or as one participant in a distributed attack
+    /// on a third party. Requests are vetted (no private/link-local targets,
+    /// no redirects), size-capped, and budgeted per session, but the residual
+    /// risk is real: **set this to `false` on any deployment where outbound
+    /// traffic attributed to your address would be a problem.** With it off
+    /// the attacker still sees a convincing download; nothing is fetched.
+    #[serde(default = "default_fetch_payloads")]
+    pub fetch_payloads: bool,
+
+    /// Hard cap on a single fetched payload. Enforced on bytes actually read,
+    /// not on the advertised `Content-Length`. Real dropper payloads are small;
+    /// this exists so a multi-gigabyte response cannot be turned into a
+    /// multi-gigabyte allocation plus two full-size disk writes.
+    #[serde(default = "default_max_payload_bytes")]
+    pub max_payload_bytes: u64,
+
+    /// Payload fetches allowed per session, so one session cannot issue
+    /// `wget` in a loop and turn the honeypot into a traffic amplifier.
+    #[serde(default = "default_max_fetches_per_session")]
+    pub max_fetches_per_session: u32,
+
+    /// Largest file the forensics engine will read into memory when analysing
+    /// a torn-down session's upperdir. String extraction and IOC scanning cost
+    /// several times the file size in allocations, so an oversized artifact is
+    /// hashed and recorded but not string-scanned.
+    #[serde(default = "default_max_analysis_bytes")]
+    pub max_analysis_bytes: u64,
+}
+
+fn default_fetch_payloads() -> bool {
+    true
+}
+
+fn default_max_payload_bytes() -> u64 {
+    8 * 1024 * 1024
+}
+
+fn default_max_fetches_per_session() -> u32 {
+    5
+}
+
+fn default_max_analysis_bytes() -> u64 {
+    32 * 1024 * 1024
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -424,6 +476,10 @@ impl Default for AegisConfig {
                 sessions_dir: "./sessions".into(),
                 attacks_log: "./attacks.json".into(),
                 string_min_len: 6,
+                fetch_payloads: default_fetch_payloads(),
+                max_payload_bytes: default_max_payload_bytes(),
+                max_fetches_per_session: default_max_fetches_per_session(),
+                max_analysis_bytes: default_max_analysis_bytes(),
             },
             logging: LoggingConfig {
                 level: "info".into(),

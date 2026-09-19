@@ -20,6 +20,25 @@ sessions_dir    = "./sessions"
 attacks_log     = "./attacks.json"
 string_min_len  = 6
 
+# Whether to actually fetch URLs an attacker types into wget/curl.
+#
+# This is the honeypot's ONLY outbound traffic, and it is entirely
+# attacker-directed: the sandbox has no network, but with this on the gateway
+# makes HTTP requests of the attacker's choosing from this host's address and
+# ASN. That is what makes payload capture work — and also what makes the
+# honeypot usable as a request relay, for attribution laundering, or as one
+# participant in an attack on a third party. Requests are vetted (no
+# private/loopback/link-local targets, no redirects followed), size-capped and
+# budgeted per session, but the residual risk is real.
+#
+# Set to false on any deployment where outbound traffic attributed to your
+# address would be a problem. With it off the attacker still sees a convincing
+# download; nothing is actually fetched.
+fetch_payloads          = true
+max_payload_bytes       = 8388608    # 8 MiB — enforced on bytes read, not Content-Length
+max_fetches_per_session = 5          # Stops `wget` in a loop becoming an amplifier
+max_analysis_bytes      = 33554432   # 32 MiB — cap on files read whole for string/IOC scanning
+
 [logging]
 level = "info"
 json  = false

@@ -5,28 +5,47 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Aegis — Live Threat Feed</title>
 <style>
+  /* ---------------------------------------------------------------------
+     Design tokens.
+     One brand accent (blue) for chrome/links/informational marks; a fixed,
+     reserved status quad (good/warning/serious/critical) for severity only
+     — never reused as decoration, so a color always means the same thing.
+     Surfaces are deep charcoal, not pure black (easier on the eyes across
+     a long monitoring shift); radii step up for "squircle" hero tiles and
+     down for nested/compact elements.
+  --------------------------------------------------------------------- */
   :root {
-    --bg: #0a0d12;
-    --panel: #121820;
-    --panel-2: #161d27;
+    --plane: #0a0d12;
+    --surface-1: #11151c;
+    --surface-2: #161b24;
+    --surface-3: #1b212c;
     --border: rgba(255,255,255,0.07);
-    --border-strong: rgba(255,255,255,0.14);
-    --text: #e8eef4;
-    --muted: #8a97a6;
-    --muted-2: #66727f;
-    --accent: #34d399;
-    --accent-strong: #10b981;
-    --accent-soft: rgba(52,211,153,0.12);
-    --accent-border: rgba(52,211,153,0.28);
-    --warn: #f5b942;
-    --warn-soft: rgba(245,185,66,0.14);
-    --danger: #f87171;
-    --danger-soft: rgba(248,113,113,0.14);
-    --link: #6fa8f5;
-    --link-soft: rgba(111,168,245,0.14);
-    --radius: 10px;
-    --radius-sm: 7px;
-    --shadow: 0 1px 2px rgba(0,0,0,.35), 0 10px 28px -12px rgba(0,0,0,.55);
+    --border-strong: rgba(255,255,255,0.15);
+    --text: #eef2f7;
+    --text-2: #98a4b6;
+    --text-3: #6b7690;
+
+    --accent: #3987e5;
+    --accent-strong: #62a3f2;
+    --accent-soft: rgba(57,135,229,0.13);
+    --accent-border: rgba(57,135,229,0.32);
+
+    --good: #0ca30c;
+    --good-soft: rgba(30,180,60,0.14);
+    --warning: #fab219;
+    --warning-soft: rgba(250,178,25,0.14);
+    --serious: #ec835a;
+    --serious-soft: rgba(236,131,90,0.14);
+    --critical: #e0514f;
+    --critical-soft: rgba(224,81,79,0.14);
+    --violet: #9085e9;
+    --violet-soft: rgba(144,133,233,0.14);
+
+    --radius-lg: 20px;
+    --radius: 14px;
+    --radius-sm: 10px;
+    --gap: 16px;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 14px 32px -18px rgba(0,0,0,.65);
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
     --mono: "SF Mono", "Fira Code", ui-monospace, Menlo, Consolas, monospace;
   }
@@ -35,62 +54,100 @@
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 8px; }
   ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+  html { scroll-behavior: smooth; }
   body {
     margin: 0;
     /* A static gradient baked at a fixed size, not `background-attachment:
        fixed` — that forces a repaint of the whole gradient on every scroll
        frame, which is a real jank source on weaker/integrated GPUs. */
     background:
-      radial-gradient(1100px 560px at 12% -8%, rgba(52,211,153,0.055), transparent 60%),
-      radial-gradient(900px 480px at 100% 0%, rgba(111,168,245,0.045), transparent 55%),
-      var(--bg);
+      radial-gradient(1100px 560px at 6% -10%, rgba(57,135,229,0.07), transparent 60%),
+      radial-gradient(900px 480px at 100% 0%, rgba(144,133,233,0.045), transparent 55%),
+      var(--plane);
     color: var(--text);
     font-family: var(--sans);
     font-size: 13.5px;
     line-height: 1.55;
     -webkit-font-smoothing: antialiased;
+    font-variant-numeric: tabular-nums;
   }
   code, .mono { font-family: var(--mono); }
+  a { color: inherit; }
 
-  header {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 14px 24px;
-    border-bottom: 1px solid var(--border);
-    position: sticky;
-    top: 0;
-    /* Solid, not blurred: backdrop-filter forces the compositor to
-       recompute the header's backdrop on every repaint of the content
-       scrolling under it — expensive on integrated GPUs / some Wayland
-       compositors, and this page repaints often (live feed). */
-    background: #0c0f14;
-    z-index: 5;
+  /* ---------------------------------------------------------------------
+     Shell: a persistent sidebar (brand, section nav, live status) plus a
+     scrolling main column — replaces the old sticky top header so the
+     connection status stays glanceable no matter how far down a now much
+     longer page you've scrolled.
+  --------------------------------------------------------------------- */
+  .shell { display: flex; align-items: flex-start; min-height: 100vh; }
+
+  .sidebar {
+    width: 232px; flex: 0 0 232px; position: sticky; top: 0; height: 100vh;
+    display: flex; flex-direction: column; gap: 22px;
+    padding: 22px 18px; border-right: 1px solid var(--border);
+    background: #0c0f15;
   }
-  header .brand { display: flex; align-items: center; gap: 10px; }
-  header .logo {
-    width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0;
-    display: flex; align-items: center; justify-content: center; font-size: 15px;
-    background: linear-gradient(135deg, var(--accent), var(--accent-strong));
-    box-shadow: 0 2px 10px rgba(52,211,153,0.32);
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand .logo {
+    width: 32px; height: 32px; border-radius: 10px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; font-size: 16px;
+    background: linear-gradient(135deg, var(--accent), #2a5fb0);
+    box-shadow: 0 2px 12px rgba(57,135,229,0.35);
   }
-  header h1 { font-size: 14.5px; margin: 0; letter-spacing: 0.01em; font-weight: 700; color: var(--text); }
-  header .sub { color: var(--muted); font-size: 12px; }
-  #status { margin-left: auto; font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 7px; font-weight: 500; }
-  #status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  .brand h1 { font-size: 15px; margin: 0; letter-spacing: 0.01em; font-weight: 700; color: var(--text); }
+  .brand .sub { color: var(--text-3); font-size: 11px; font-weight: 500; }
+
+  .side-nav { display: flex; flex-direction: column; gap: 2px; }
+  .side-nav a {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; border-radius: var(--radius-sm); text-decoration: none;
+    color: var(--text-2); font-size: 12.5px; font-weight: 600;
+    transition: background .12s ease, color .12s ease;
+  }
+  .side-nav a .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--text-3); flex-shrink: 0; }
+  .side-nav a:hover { background: var(--surface-2); color: var(--text); }
+  .side-nav a:hover .dot { background: var(--accent); }
+
+  .sidebar-foot { margin-top: auto; display: flex; flex-direction: column; gap: 10px; }
+  #status {
+    display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-2); font-weight: 600;
+    padding: 8px 10px; border-radius: var(--radius-sm); background: var(--surface-2); border: 1px solid var(--border);
+  }
+  #status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 6px var(--accent); flex-shrink: 0; }
   #status .dot.live { animation: pulse 2s infinite; }
-  #status .dot.down { background: var(--danger); box-shadow: 0 0 6px var(--danger); animation: none; }
+  #status .dot.down { background: var(--critical); box-shadow: 0 0 6px var(--critical); animation: none; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
-  @keyframes flash { 0% { background: rgba(52,211,153,0.16); } 100% { background: transparent; } }
+  @keyframes flash { 0% { background: rgba(57,135,229,0.18); } 100% { background: transparent; } }
+  .sidebar-note { font-size: 10.5px; color: var(--text-3); line-height: 1.5; }
 
-  main { padding: 24px 24px 44px; max-width: 1320px; margin: 0 auto; }
+  main { flex: 1 1 auto; min-width: 0; padding: 24px 28px 48px; max-width: 1440px; }
+  main > section { scroll-margin-top: 20px; }
 
-  .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-bottom: 22px; }
+  /* ---------------------------------------------------------------------
+     Bento grid: a 12-column base with tiles sized by data priority, not
+     content volume. Hero KPI row uses an uneven split (bookend tiles
+     larger); everything else declares an explicit span.
+  --------------------------------------------------------------------- */
+  .bento { display: grid; grid-template-columns: repeat(12, 1fr); gap: var(--gap); align-items: start; }
+  .bento + .bento, .bento + section, section + .bento { margin-top: var(--gap); }
+
+  .stats { grid-template-columns: 2fr 1.3fr 1.3fr 1.3fr 1.8fr; margin-bottom: 0; }
+  @media (max-width: 900px) { .stats { grid-template-columns: repeat(2, 1fr) !important; } }
+
+  .span-4 { grid-column: span 4; }
+  .span-5 { grid-column: span 5; }
+  .span-6 { grid-column: span 6; }
+  .span-7 { grid-column: span 7; }
+  .span-8 { grid-column: span 8; }
+  .span-12 { grid-column: span 12; }
+  @media (max-width: 1050px) { .span-4, .span-5, .span-6, .span-7, .span-8 { grid-column: span 12; } }
+
   .stat {
     position: relative; overflow: hidden;
-    background: linear-gradient(180deg, var(--panel-2), var(--panel));
-    border: 1px solid var(--border); border-radius: var(--radius);
-    padding: 16px 18px; box-shadow: var(--shadow);
+    background: linear-gradient(180deg, var(--surface-2), var(--surface-1));
+    border: 1px solid var(--border); border-radius: var(--radius-lg);
+    padding: 18px 20px; box-shadow: var(--shadow);
     transition: transform .15s ease, border-color .15s ease;
   }
   .stat::before {
@@ -98,50 +155,107 @@
     background: linear-gradient(90deg, var(--accent), transparent 85%);
   }
   .stat:hover { transform: translateY(-2px); border-color: var(--border-strong); }
-  .stat .value { font-size: 25px; font-weight: 700; color: var(--text); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-  .stat .label { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; margin-top: 6px; font-weight: 600; }
-
-  .grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: 16px; align-items: start; }
-  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } .stats { grid-template-columns: repeat(2, 1fr); } }
+  .stat .value { font-size: 27px; font-weight: 700; color: var(--text); letter-spacing: -0.02em; }
+  .stat .label { color: var(--text-2); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; margin-top: 6px; font-weight: 600; }
 
   .panel {
-    background: linear-gradient(180deg, var(--panel-2), var(--panel));
-    border: 1px solid var(--border); border-radius: var(--radius);
-    padding: 18px 20px; margin-bottom: 16px; box-shadow: var(--shadow);
+    background: linear-gradient(180deg, var(--surface-2), var(--surface-1));
+    border: 1px solid var(--border); border-radius: var(--radius-lg);
+    padding: 20px 22px; box-shadow: var(--shadow);
   }
   .panel h2 {
-    font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted);
+    font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-2);
     margin: 0 0 14px; font-weight: 700; display: flex; align-items: center; gap: 8px;
   }
-  .panel h2 .count { color: var(--accent); font-weight: 600; text-transform: none; letter-spacing: 0; }
+  .panel h2 .count { color: var(--accent-strong); font-weight: 600; text-transform: none; letter-spacing: 0; }
 
-  .chart { display: flex; align-items: flex-end; gap: 4px; height: 96px; border-bottom: 1px solid var(--border); }
+  .chart { display: flex; align-items: flex-end; gap: 4px; height: 108px; border-bottom: 1px solid var(--border); }
   .chart .bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
-  .chart .bar { width: 100%; background: linear-gradient(180deg, var(--accent), rgba(52,211,153,0.12)); border-radius: 4px 4px 0 0; min-height: 3px; transition: opacity .15s ease; }
+  .chart .bar { width: 100%; background: linear-gradient(180deg, var(--accent-strong), rgba(57,135,229,0.1)); border-radius: 4px 4px 0 0; min-height: 3px; transition: opacity .15s ease; }
   .chart .bar-wrap:hover .bar { opacity: 0.8; }
-  .chart .bar-label { font-size: 9.5px; color: var(--muted-2); margin-top: 7px; white-space: nowrap; }
+  .chart .bar-label { font-size: 9.5px; color: var(--text-3); margin-top: 7px; white-space: nowrap; }
 
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 8px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  th { color: var(--muted-2); font-weight: 600; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; }
-  td.count { color: var(--accent); text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
-  .rank-tables { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
-  @media (max-width: 1100px) { .rank-tables { grid-template-columns: repeat(3, 1fr); } }
-  @media (max-width: 900px) { .rank-tables { grid-template-columns: 1fr 1fr; } }
+  th { color: var(--text-3); font-weight: 600; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+  td.count { color: var(--accent-strong); text-align: right; font-weight: 600; }
+  /* Sized off the panel's own width, not the viewport: this panel now lives
+     in the narrower right rail rather than near-full-width, so a
+     viewport-based breakpoint would never fire even though 6 side-by-side
+     mini-tables don't fit here. `min-width: 0` on each grid item is the
+     other half of the fix — grid items default to `min-width: auto`, which
+     refuses to shrink a <table> below its content's intrinsic width and
+     silently overflows the panel instead of letting the cells' own
+     `text-overflow: ellipsis` do its job. */
+  .rank-panel { container-type: inline-size; }
+  .rank-tables { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .rank-tables > div { min-width: 0; }
+  @container (min-width: 480px) { .rank-tables { grid-template-columns: repeat(3, 1fr); } }
+  @container (min-width: 760px) { .rank-tables { grid-template-columns: repeat(6, 1fr); } }
   .rank-tables td.clickable, .rank-tables th { cursor: default; }
   .rank-tables tr.clickable { cursor: pointer; transition: background .12s ease; }
-  .rank-tables tr.clickable:hover td { color: var(--accent); background: var(--accent-soft); }
+  .rank-tables tr.clickable:hover td { color: var(--accent-strong); background: var(--accent-soft); }
+
+  .score-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 10.5px; font-weight: 700; }
+  .score-low { background: rgba(255,255,255,0.07); color: var(--text-2); }
+  .score-med { background: var(--warning-soft); color: var(--warning); }
+  .score-high { background: var(--critical-soft); color: var(--critical); }
+
+  .new-badge {
+    display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 4px;
+    font-size: 9px; font-weight: 800; letter-spacing: 0.04em; vertical-align: 1px;
+    background: var(--accent-soft); color: var(--accent-strong); border: 1px solid var(--accent-border);
+  }
+
+  /* Geo map: plain equirectangular projection onto a lat/lon grid — no
+     coastline data or mapping library, just session clusters plotted by
+     lat/lon over a graticule. Keeps this dependency-free and tiny. */
+  .geo-map-wrap { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
+  .geo-map-wrap svg { flex: 1 1 420px; min-width: 260px; width: 100%; height: auto; background: rgba(255,255,255,0.015); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+  .geo-grid { stroke: rgba(255,255,255,0.06); stroke-width: 0.5; }
+  .geo-grid.axis { stroke: rgba(255,255,255,0.16); }
+  .geo-dot { fill: var(--accent); fill-opacity: 0.55; stroke: var(--accent-strong); stroke-width: 0.6; }
+  .geo-legend { flex: 1 1 220px; min-width: 200px; }
+  .geo-legend .row { display: flex; justify-content: space-between; gap: 10px; padding: 5px 0; border-bottom: 1px dashed var(--border); font-size: 12px; }
+  .geo-legend .row b { color: var(--text); font-weight: 600; }
+  .geo-legend .count { color: var(--accent-strong); font-weight: 600; }
+
+  /* Session archive */
+  .session-controls { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  .session-archive-table tbody tr { cursor: pointer; transition: background .12s ease; }
+  .session-archive-table tbody tr:hover td { background: rgba(255,255,255,0.035); }
+  .load-more-wrap { text-align: center; margin-top: 12px; }
+  button.load-more {
+    background: var(--surface-3); border: 1px solid var(--border); color: var(--text);
+    border-radius: 999px; padding: 7px 18px; cursor: pointer; font: 12px var(--sans); font-weight: 600;
+    transition: border-color .15s ease, color .15s ease;
+  }
+  button.load-more:hover { border-color: var(--accent-border); color: var(--accent-strong); }
+
+  /* All-time IOC rollup */
+  .ioc-rollup .ioc-group { margin-bottom: 10px; }
+  .ioc-rollup .ioc-group b { display: block; margin-bottom: 4px; color: var(--text); }
+  .ioc-rollup .ioc-values { color: var(--text-2); font-size: 11.5px; word-break: break-all; font-family: var(--mono); }
+
+  input#feed-search, input#session-search {
+    background: var(--surface-3); color: var(--text); border: 1px solid var(--border);
+    border-radius: 999px; padding: 6px 14px; font: 12px var(--sans);
+    transition: border-color .15s ease;
+  }
+  input#feed-search:focus, input#session-search:focus { outline: none; border-color: var(--accent-border); }
+  input#feed-search { min-width: 170px; }
+  input#session-search { flex: 1 1 240px; min-width: 200px; }
 
   .feed-controls { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
   .chip {
     display: inline-flex; align-items: center; gap: 6px;
-    background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent-border);
+    background: var(--accent-soft); color: var(--accent-strong); border: 1px solid var(--accent-border);
     border-radius: 999px; padding: 4px 12px; font-size: 11.5px; font-weight: 600;
   }
   .chip button { background: none; border: none; color: inherit; cursor: pointer; font: inherit; padding: 0; line-height: 1; opacity: .75; }
   .chip button:hover { opacity: 1; }
   select#kind-filter {
-    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    background: var(--surface-3); color: var(--text); border: 1px solid var(--border);
     border-radius: 999px; padding: 6px 14px; font: 12px var(--sans); cursor: pointer;
     transition: border-color .15s ease;
   }
@@ -160,135 +274,199 @@
     display: inline-block; padding: 2px 8px; border-radius: 5px;
     font-size: 10px; font-weight: 700; letter-spacing: 0.03em;
   }
-  .b-session_start, .b-session_end { background: var(--link-soft); color: var(--link); }
-  .b-credential_harvest { background: var(--warn-soft); color: var(--warn); }
-  .b-command_run { background: var(--accent-soft); color: var(--accent); }
-  .b-payload_captured { background: var(--danger-soft); color: var(--danger); }
-  .b-syscall_execve, .b-syscall_connect, .b-syscall_memfd_create { background: rgba(184,146,240,0.14); color: #b892f0; }
-  .ip { color: var(--muted); font-family: var(--mono); font-size: 0.95em; }
-  .ip.linklike:hover { color: var(--accent); text-decoration: underline; }
-  .geo-tag { font-family: var(--sans); font-size: 10px; color: var(--muted-2); white-space: nowrap; margin-top: 1px; }
-  .session-link { color: var(--link); text-decoration: none; }
+  /* Status is reserved and semantic, never decorative: lifecycle events
+     stay neutral-blue, a successful credential harvest is a warning, a
+     kernel-level syscall probe is "serious", and an actually-captured
+     payload — the strongest signal of real intent — is critical. */
+  .b-session_start, .b-session_end { background: var(--accent-soft); color: var(--accent-strong); }
+  .b-credential_harvest { background: var(--warning-soft); color: var(--warning); }
+  .b-command_run { background: rgba(255,255,255,0.07); color: var(--text-2); }
+  .b-payload_captured { background: var(--critical-soft); color: var(--critical); }
+  .b-syscall_execve, .b-syscall_connect, .b-syscall_memfd_create { background: var(--serious-soft); color: var(--serious); }
+  .ip { color: var(--text-2); font-family: var(--mono); font-size: 0.95em; }
+  .ip.linklike:hover { color: var(--accent-strong); text-decoration: underline; }
+  .geo-tag { font-family: var(--sans); font-size: 10px; color: var(--text-3); white-space: nowrap; margin-top: 1px; }
+  .session-link { color: var(--accent-strong); text-decoration: none; }
   .session-link:hover { text-decoration: underline; }
-  .empty { color: var(--muted); font-style: italic; padding: 12px 0; }
+  .empty { color: var(--text-2); font-style: italic; padding: 12px 0; }
 
   .payload-row { cursor: pointer; }
   .payload-detail { background: rgba(255,255,255,0.02); }
-  .payload-detail td { white-space: normal; word-break: break-all; font-size: 11.5px; color: var(--muted); padding: 10px; }
+  .payload-detail td { white-space: normal; word-break: break-all; font-size: 11.5px; color: var(--text-2); padding: 10px; }
   .ioc-group { margin-bottom: 6px; }
   .ioc-group b { color: var(--text); }
 
   /* Session drill-down modal */
   .modal-overlay {
-    position: fixed; inset: 0; background: rgba(5,7,10,0.82);
+    position: fixed; inset: 0; background: rgba(4,6,9,0.84);
     display: flex; align-items: flex-start; justify-content: center;
     padding: 40px 20px; z-index: 100; overflow-y: auto;
   }
   .modal {
-    background: linear-gradient(180deg, var(--panel-2), var(--panel));
-    border: 1px solid var(--border-strong); border-radius: 14px; width: 100%; max-width: 820px;
+    background: linear-gradient(180deg, var(--surface-2), var(--surface-1));
+    border: 1px solid var(--border-strong); border-radius: var(--radius-lg); width: 100%; max-width: 820px;
     padding: 22px 24px; box-shadow: 0 24px 64px -12px rgba(0,0,0,0.6);
   }
   .modal-head { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
   .modal-head h3 { margin: 0; font-size: 14.5px; color: var(--text); font-weight: 700; }
   .modal-head button.close {
-    margin-left: auto; background: rgba(255,255,255,0.04); border: 1px solid var(--border); color: var(--muted);
+    margin-left: auto; background: rgba(255,255,255,0.04); border: 1px solid var(--border); color: var(--text-2);
     border-radius: 999px; padding: 5px 12px; cursor: pointer; font: 11.5px var(--sans); transition: border-color .15s ease, color .15s ease;
   }
   .modal-head button.close:hover { border-color: var(--border-strong); color: var(--text); }
   .modal-section { margin-bottom: 18px; }
-  .modal-section h4 { font-size: 11px; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; letter-spacing: 0.06em; font-weight: 700; }
-  .modal-meta { display: flex; flex-wrap: wrap; gap: 18px; font-size: 12px; color: var(--muted); }
+  .modal-section h4 { font-size: 11px; text-transform: uppercase; color: var(--text-2); margin: 0 0 8px; letter-spacing: 0.06em; font-weight: 700; }
+  .modal-meta { display: flex; flex-wrap: wrap; gap: 18px; font-size: 12px; color: var(--text-2); }
   .modal-meta b { color: var(--text); font-family: var(--mono); font-weight: 600; }
   .timeline { max-height: 160px; overflow-y: auto; font-size: 12px; }
   .timeline .t-row { display: flex; gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--border); }
-  .timeline .t-time { color: var(--muted-2); width: 70px; flex-shrink: 0; font-family: var(--mono); font-size: 0.92em; }
+  .timeline .t-time { color: var(--text-3); width: 70px; flex-shrink: 0; font-family: var(--mono); font-size: 0.92em; }
 
   .replay { background: #000; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; }
   .replay pre {
-    margin: 0; color: #e8eef4; font-family: var(--mono); font-size: 12px;
+    margin: 0; color: var(--text); font-family: var(--mono); font-size: 12px;
     min-height: 220px; max-height: 320px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
   }
   .replay-controls { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
   .replay-controls button {
-    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    background: var(--surface-3); border: 1px solid var(--border); color: var(--text);
     border-radius: 999px; padding: 5px 13px; cursor: pointer; font: 11.5px var(--sans); font-weight: 600;
     transition: border-color .15s ease, color .15s ease;
   }
-  .replay-controls button:hover { border-color: var(--accent-border); color: var(--accent); }
-  .replay-controls .rtime { color: var(--muted); font-size: 11px; margin-left: auto; font-family: var(--mono); }
+  .replay-controls button:hover { border-color: var(--accent-border); color: var(--accent-strong); }
+  .replay-controls .rtime { color: var(--text-2); font-size: 11px; margin-left: auto; font-family: var(--mono); }
 
-  footer { text-align: center; color: var(--muted-2); font-size: 11px; padding: 28px; }
+  footer { text-align: center; color: var(--text-3); font-size: 11px; padding: 28px 0 8px; }
   [hidden] { display: none !important; }
+
+  @media (max-width: 900px) {
+    .shell { flex-direction: column; }
+    .sidebar {
+      position: sticky; width: auto; height: auto; flex-direction: row; align-items: center;
+      gap: 16px; padding: 12px 16px; overflow-x: auto;
+    }
+    .side-nav { flex-direction: row; }
+    .sidebar-foot { margin-top: 0; margin-left: auto; flex-direction: row; }
+    .sidebar-note { display: none; }
+    main { padding: 18px 16px 40px; }
+  }
 </style>
 </head>
 <body>
-<header>
-  <div class="brand">
-    <span class="logo">&#128737;</span>
-    <h1>AEGIS</h1>
-  </div>
-  <span class="sub">live threat feed</span>
-  <div id="status"><span class="dot" id="status-dot"></span><span id="status-text">connecting…</span></div>
-</header>
-
-<main>
-  <div class="stats" id="stats"></div>
-
-  <div class="panel">
-    <h2>Activity — last 24h</h2>
-    <div class="chart" id="chart"></div>
-  </div>
-
-  <div class="grid">
-    <div>
-      <div class="panel feed">
-        <h2>Live Feed <span class="count" id="feed-count"></span></h2>
-        <div class="feed-controls">
-          <select id="kind-filter">
-            <option value="">All events</option>
-            <option value="SESSION_START">Session start</option>
-            <option value="SESSION_END">Session end</option>
-            <option value="CREDENTIAL_HARVEST">Credential harvest</option>
-            <option value="COMMAND_RUN">Command run</option>
-            <option value="PAYLOAD_CAPTURED">Payload captured</option>
-          </select>
-          <span id="ip-filter-chip" hidden class="chip">
-            IP: <b id="ip-filter-value"></b>
-            <button id="ip-filter-clear" title="Clear IP filter">✕</button>
-          </span>
-        </div>
-        <table>
-          <thead><tr><th style="width:70px">Time</th><th style="width:110px">Source IP</th><th style="width:150px">Event</th><th>Detail</th></tr></thead>
-          <tbody id="feed-body"><tr><td colspan="4" class="empty">waiting for events…</td></tr></tbody>
-        </table>
-      </div>
-
-      <div class="panel">
-        <h2>Captured Payloads <span class="count" id="payload-count"></span></h2>
-        <table>
-          <thead><tr><th style="width:70px">Time</th><th style="width:110px">IP</th><th style="width:140px">SHA-256</th><th style="width:70px">Size</th><th>Source</th></tr></thead>
-          <tbody id="payload-body"><tr><td colspan="5" class="empty">none captured yet</td></tr></tbody>
-        </table>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="logo">&#128737;</span>
+      <div>
+        <h1>AEGIS</h1>
+        <div class="sub">live threat feed</div>
       </div>
     </div>
+    <nav class="side-nav">
+      <a href="#stats"><span class="dot"></span>Overview</a>
+      <a href="#origins"><span class="dot"></span>Attack Origins</a>
+      <a href="#feed"><span class="dot"></span>Live Feed</a>
+      <a href="#rankings"><span class="dot"></span>Rankings &amp; IOCs</a>
+      <a href="#sessions"><span class="dot"></span>Session Archive</a>
+    </nav>
+    <div class="sidebar-foot">
+      <div id="status"><span class="dot" id="status-dot"></span><span id="status-text">connecting…</span></div>
+      <div class="sidebar-note">reads attacks.json + sessions/*.cast only · no credentials or payload contents leave this page</div>
+    </div>
+  </aside>
 
-    <div>
-      <div class="panel">
-        <h2>Top Credentials, Commands &amp; Sources</h2>
-        <div class="rank-tables">
-          <div><table><thead><tr><th>Username</th><th></th></tr></thead><tbody id="top-users"></tbody></table></div>
-          <div><table><thead><tr><th>Password</th><th></th></tr></thead><tbody id="top-passwords"></tbody></table></div>
-          <div><table><thead><tr><th>Command</th><th></th></tr></thead><tbody id="top-commands"></tbody></table></div>
-          <div><table><thead><tr><th>Source IP</th><th></th></tr></thead><tbody id="top-ips"></tbody></table></div>
-          <div><table><thead><tr><th>Country</th><th></th></tr></thead><tbody id="top-countries"></tbody></table></div>
+  <main>
+    <section id="stats" class="bento stats"></section>
+
+    <section id="origins" class="bento">
+      <div class="panel span-5">
+        <h2>Activity — last 24h</h2>
+        <div class="chart" id="chart"></div>
+      </div>
+      <div class="panel span-7">
+        <h2>Attack Origins <span class="count" id="geo-count"></span></h2>
+        <div class="geo-map-wrap">
+          <svg id="geo-map" viewBox="0 0 720 360" preserveAspectRatio="xMidYMid meet"></svg>
+          <div class="geo-legend" id="geo-legend"><span class="empty">loading…</span></div>
         </div>
       </div>
-    </div>
-  </div>
-</main>
+    </section>
 
-<footer>aegis-dashboard · reads attacks.json + sessions/*.cast only · no credentials or payload contents leave this page</footer>
+    <section id="feed" class="bento">
+      <div class="span-7" style="display:flex; flex-direction:column; gap:var(--gap);">
+        <div class="panel feed">
+          <h2>Live Feed <span class="count" id="feed-count"></span></h2>
+          <div class="feed-controls">
+            <select id="kind-filter">
+              <option value="">All events</option>
+              <option value="SESSION_START">Session start</option>
+              <option value="SESSION_END">Session end</option>
+              <option value="CREDENTIAL_HARVEST">Credential harvest</option>
+              <option value="COMMAND_RUN">Command run</option>
+              <option value="PAYLOAD_CAPTURED">Payload captured</option>
+            </select>
+            <input type="text" id="feed-search" placeholder="search commands, users, IPs…">
+            <span id="ip-filter-chip" hidden class="chip">
+              IP: <b id="ip-filter-value"></b>
+              <button id="ip-filter-clear" title="Clear IP filter">✕</button>
+            </span>
+          </div>
+          <table>
+            <thead><tr><th style="width:70px">Time</th><th style="width:110px">Source IP</th><th style="width:150px">Event</th><th>Detail</th></tr></thead>
+            <tbody id="feed-body"><tr><td colspan="4" class="empty">waiting for events…</td></tr></tbody>
+          </table>
+        </div>
+
+        <div class="panel">
+          <h2>Captured Payloads <span class="count" id="payload-count"></span></h2>
+          <table>
+            <thead><tr><th style="width:70px">Time</th><th style="width:110px">IP</th><th style="width:140px">SHA-256</th><th style="width:70px">Size</th><th>Source</th></tr></thead>
+            <tbody id="payload-body"><tr><td colspan="5" class="empty">none captured yet</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="rankings" class="span-5" style="display:flex; flex-direction:column; gap:var(--gap); scroll-margin-top:20px;">
+        <div class="panel rank-panel">
+          <h2>Top Credentials, Commands &amp; Sources</h2>
+          <div class="rank-tables">
+            <div><table><thead><tr><th>Username</th><th></th></tr></thead><tbody id="top-users"></tbody></table></div>
+            <div><table><thead><tr><th>Password</th><th></th></tr></thead><tbody id="top-passwords"></tbody></table></div>
+            <div><table><thead><tr><th>Command</th><th></th></tr></thead><tbody id="top-commands"></tbody></table></div>
+            <div><table><thead><tr><th>Source IP</th><th></th></tr></thead><tbody id="top-ips"></tbody></table></div>
+            <div><table><thead><tr><th>Country</th><th></th></tr></thead><tbody id="top-countries"></tbody></table></div>
+            <div><table><thead><tr><th title="cumulative threat score: commands + 5/credential harvest + 25/payload">Threat IP</th><th></th></tr></thead><tbody id="top-threat-ips"></tbody></table></div>
+          </div>
+        </div>
+
+        <div class="panel ioc-rollup">
+          <h2>All-Time IOC Rollup <span class="count" id="ioc-count"></span></h2>
+          <div id="ioc-body"><span class="empty">loading…</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="sessions" class="panel" style="margin-top:var(--gap);">
+      <h2>Session Archive <span class="count" id="session-archive-count"></span></h2>
+      <div class="session-controls">
+        <input type="text" id="session-search" placeholder="search sessions — IP, username, password, session id…">
+      </div>
+      <div style="overflow-x:auto">
+      <table class="session-archive-table">
+        <thead><tr>
+          <th style="width:130px">Started</th><th style="width:120px">IP</th><th>Location</th>
+          <th style="width:70px">Duration</th><th style="width:50px">Cmds</th><th>Credentials</th>
+          <th style="width:60px">Payloads</th><th style="width:60px">Threat</th>
+        </tr></thead>
+        <tbody id="session-archive-body"><tr><td colspan="8" class="empty">loading…</td></tr></tbody>
+      </table>
+      </div>
+      <div class="load-more-wrap"><button class="load-more" id="session-load-more" hidden>Load more</button></div>
+    </section>
+
+    <footer>aegis-dashboard · reads attacks.json + sessions/*.cast only · no credentials or payload contents leave this page</footer>
+  </main>
+</div>
 
 <div class="modal-overlay" id="modal-overlay" hidden>
   <div class="modal">
@@ -342,6 +520,7 @@ const state = {
   feed: [],          // newest first, capped
   kindFilter: '',
   ipFilter: null,
+  feedSearch: '',
   // session_id -> { country, city } — GeoIP is only ever attached to a
   // SESSION_START event (looked up once per session), so every other event
   // in that session is annotated by joining on this map rather than the
@@ -417,7 +596,206 @@ async function refreshSummary() {
     renderRanked('top-commands', summary.top_commands, false);
     renderRanked('top-ips', summary.top_ips, true);
     renderRanked('top-countries', summary.top_countries, false);
+    renderRanked('top-threat-ips', summary.top_threat_ips, true);
   } catch (e) { /* summary poll is best-effort; live status is tracked by the SSE connection */ }
+}
+
+// ---------------------------------------------------------------------------
+// Geo map — session-origin clusters plotted with a plain equirectangular
+// projection over a lat/lon graticule (no coastline data / mapping library:
+// keeps this dependency-free and small, per the CDN allowlist constraints).
+// ---------------------------------------------------------------------------
+
+function projectGeo(lat, lon) {
+  return [(lon + 180) / 360 * 720, (90 - lat) / 180 * 360];
+}
+
+function renderGeoMap(points) {
+  const svg = document.getElementById('geo-map');
+  const legend = document.getElementById('geo-legend');
+  document.getElementById('geo-count').textContent = points.length ? `(${points.length} location${points.length === 1 ? '' : 's'})` : '';
+
+  let grid = '';
+  for (let lon = -180; lon <= 180; lon += 30) {
+    const [x] = projectGeo(0, lon);
+    grid += `<line class="geo-grid${lon === 0 ? ' axis' : ''}" x1="${x}" y1="0" x2="${x}" y2="360" />`;
+  }
+  for (let lat = -90; lat <= 90; lat += 30) {
+    const [, y] = projectGeo(lat, 0);
+    grid += `<line class="geo-grid${lat === 0 ? ' axis' : ''}" x1="0" y1="${y}" x2="720" y2="${y}" />`;
+  }
+
+  if (!points.length) {
+    svg.innerHTML = grid;
+    legend.innerHTML = '<span class="empty">no geo-tagged sessions yet</span>';
+    return;
+  }
+
+  const max = Math.max(1, ...points.map(p => p.count));
+  const dots = points.map(p => {
+    const [x, y] = projectGeo(p.lat, p.lon);
+    const r = 3 + Math.sqrt(p.count / max) * 11;
+    const label = p.city ? `${p.city}, ${p.country || 'unknown'}` : (p.country || `${p.lat.toFixed(1)}, ${p.lon.toFixed(1)}`);
+    return `<circle class="geo-dot" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}"><title>${escapeHtml(label)} — ${p.count} session${p.count === 1 ? '' : 's'}</title></circle>`;
+  }).join('');
+  svg.innerHTML = grid + dots;
+
+  legend.innerHTML = points.slice(0, 10).map(p => {
+    const label = p.city ? `${p.city}, ${p.country || 'Unknown'}` : (p.country || 'Unknown');
+    return `<div class="row"><b>${escapeHtml(label)}</b><span class="count">${p.count}</span></div>`;
+  }).join('');
+}
+
+async function refreshGeo() {
+  try {
+    const res = await fetch('/api/geo', { headers: authHeaders() });
+    if (!res.ok) return;
+    renderGeoMap(await res.json());
+  } catch (e) { /* best-effort, like the summary poll */ }
+}
+
+let geoRefreshTimer = null;
+function scheduleGeoRefresh() {
+  if (geoRefreshTimer) return;
+  geoRefreshTimer = setTimeout(() => { geoRefreshTimer = null; refreshGeo(); }, 2000);
+}
+
+// ---------------------------------------------------------------------------
+// All-time IOC rollup — distinct C2 IPs/URLs/wallets across every payload
+// ever captured, not just the ones currently in the live feed's window.
+// ---------------------------------------------------------------------------
+
+function renderIocRollup(rollup) {
+  const total = rollup.ip_addresses.length + rollup.urls.length + rollup.monero_wallets.length;
+  document.getElementById('ioc-count').textContent = total ? `(${total})` : '';
+  const groups = [
+    ['C2 / Source IPs', rollup.ip_addresses], ['URLs', rollup.urls], ['Monero wallets', rollup.monero_wallets],
+  ].filter(([, v]) => v.length);
+  document.getElementById('ioc-body').innerHTML = groups.length
+    ? groups.map(([label, values]) => `<div class="ioc-group"><b>${label} (${values.length})</b><span class="ioc-values">${values.map(v => escapeHtml(v)).join(', ')}</span></div>`).join('')
+    : '<span class="empty">no payloads captured yet</span>';
+}
+
+async function refreshIocs() {
+  try {
+    const res = await fetch('/api/iocs', { headers: authHeaders() });
+    if (!res.ok) return;
+    renderIocRollup(await res.json());
+  } catch (e) { /* best-effort, like the summary poll */ }
+}
+
+let iocRefreshTimer = null;
+function scheduleIocRefresh() {
+  if (iocRefreshTimer) return;
+  iocRefreshTimer = setTimeout(() => { iocRefreshTimer = null; refreshIocs(); }, 2000);
+}
+
+// ---------------------------------------------------------------------------
+// Session archive — full session history (independent of the live feed's
+// capped event ring buffer), searchable and paginated.
+// ---------------------------------------------------------------------------
+
+const sessionArchive = { q: '', offset: 0, limit: 25, total: 0, items: [] };
+
+function scoreClass(score) {
+  if (score >= 50) return 'score-high';
+  if (score >= 10) return 'score-med';
+  return 'score-low';
+}
+
+function renderSessionArchive() {
+  document.getElementById('session-archive-count').textContent = sessionArchive.total ? `(${sessionArchive.total})` : '';
+  const el = document.getElementById('session-archive-body');
+  if (!sessionArchive.items.length) {
+    el.innerHTML = '<tr><td colspan="8" class="empty">no sessions recorded yet</td></tr>';
+    document.getElementById('session-load-more').hidden = true;
+    return;
+  }
+
+  el.innerHTML = sessionArchive.items.map(s => {
+    const started = new Date(s.start_time).toLocaleString();
+    const loc = s.geo && s.geo.country ? (s.geo.city ? `${s.geo.city}, ${s.geo.country}` : s.geo.country) : '—';
+    const dur = s.duration_secs != null ? `${s.duration_secs.toFixed(1)}s` : 'active';
+    const creds = s.username ? `${escapeHtml(s.username)} / ${escapeHtml(s.password ?? '')}` : '—';
+    return `<tr data-session="${escapeHtml(s.session_id)}">
+      <td>${escapeHtml(started)}</td>
+      <td class="ip">${escapeHtml(s.ip)}</td>
+      <td>${escapeHtml(loc)}</td>
+      <td>${dur}</td>
+      <td class="count">${s.command_count}</td>
+      <td>${creds}</td>
+      <td class="count">${s.payload_count}</td>
+      <td><span class="score-badge ${scoreClass(s.threat_score)}">${s.threat_score}</span></td>
+    </tr>`;
+  }).join('');
+
+  el.querySelectorAll('tr[data-session]').forEach(row => {
+    row.addEventListener('click', () => openSessionModal(row.dataset.session));
+  });
+
+  document.getElementById('session-load-more').hidden = sessionArchive.items.length >= sessionArchive.total;
+}
+
+async function loadSessions(reset) {
+  if (reset) { sessionArchive.offset = 0; sessionArchive.items = []; }
+  try {
+    const params = new URLSearchParams({ limit: sessionArchive.limit, offset: sessionArchive.offset });
+    if (sessionArchive.q) params.set('q', sessionArchive.q);
+    const res = await fetch(`/api/sessions?${params}`, { headers: authHeaders() });
+    const data = await res.json();
+    sessionArchive.items = sessionArchive.items.concat(data.sessions);
+    sessionArchive.total = data.total;
+    sessionArchive.offset += data.sessions.length;
+    renderSessionArchive();
+  } catch (e) {
+    if (reset) document.getElementById('session-archive-body').innerHTML = '<tr><td colspan="8" class="empty">failed to load sessions</td></tr>';
+  }
+}
+
+document.getElementById('session-load-more').addEventListener('click', () => loadSessions(false));
+let sessionSearchTimer = null;
+document.getElementById('session-search').addEventListener('input', (e) => {
+  sessionArchive.q = e.target.value.trim();
+  clearTimeout(sessionSearchTimer);
+  sessionSearchTimer = setTimeout(() => loadSessions(true), 250);
+});
+
+// ---------------------------------------------------------------------------
+// First-seen tracking — flags the first-ever occurrence of a command,
+// username, or password with a "NEW" badge in the live feed. `known` is
+// seeded once from /api/known (everything the store has ever ingested, so
+// nothing in the backlog gets retroactively flagged) and grows client-side
+// as fresh live events come in.
+// ---------------------------------------------------------------------------
+
+const known = { usernames: new Set(), passwords: new Set(), commands: new Set() };
+
+async function loadKnownValues() {
+  try {
+    const res = await fetch('/api/known', { headers: authHeaders() });
+    const data = await res.json();
+    data.usernames.forEach(v => known.usernames.add(v));
+    data.passwords.forEach(v => known.passwords.add(v));
+    data.commands.forEach(v => known.commands.add(v));
+  } catch (e) { /* first-seen badges just won't appear */ }
+}
+
+// Marks ev._newX for the values this event introduces and folds them into
+// the known-value sets, so a repeat of the same value later isn't re-flagged.
+// Must run exactly once per event object, at push time — not at render time,
+// since renderFeed() can run many times over the same buffered events.
+function markNovelty(ev) {
+  if (ev.event === 'COMMAND_RUN') {
+    ev._newCommand = !known.commands.has(ev.command);
+    known.commands.add(ev.command);
+  } else if (ev.event === 'CREDENTIAL_HARVEST') {
+    ev._newUsername = !known.usernames.has(ev.username);
+    known.usernames.add(ev.username);
+    if (ev.password != null) {
+      ev._newPassword = !known.passwords.has(ev.password);
+      known.passwords.add(ev.password);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -428,8 +806,12 @@ function eventDetail(ev) {
   switch (ev.event) {
     case 'SESSION_START': return `session <code><a href="#" class="session-link" data-id="${escapeHtml(ev.session_id)}">${escapeHtml(ev.session_id)}</a></code> opened on port ${ev.port}`;
     case 'SESSION_END': return `session <code><a href="#" class="session-link" data-id="${escapeHtml(ev.session_id)}">${escapeHtml(ev.session_id)}</a></code> closed after ${ev.duration_secs.toFixed(1)}s`;
-    case 'CREDENTIAL_HARVEST': return `<b>${escapeHtml(ev.username)}</b> / <b>${escapeHtml(ev.password ?? '')}</b> (${ev.auth_method})`;
-    case 'COMMAND_RUN': return `<code>${escapeHtml(ev.command)}</code>`;
+    case 'CREDENTIAL_HARVEST': {
+      const userBadge = ev._newUsername ? '<span class="new-badge">NEW USER</span>' : '';
+      const passBadge = ev._newPassword ? '<span class="new-badge">NEW PASS</span>' : '';
+      return `<b>${escapeHtml(ev.username)}</b>${userBadge} / <b>${escapeHtml(ev.password ?? '')}</b>${passBadge} (${ev.auth_method})`;
+    }
+    case 'COMMAND_RUN': return `<code>${escapeHtml(ev.command)}</code>${ev._newCommand ? '<span class="new-badge">NEW</span>' : ''}`;
     case 'PAYLOAD_CAPTURED': return `<code>${escapeHtml(ev.sha256.slice(0, 16))}…</code> (${ev.size_bytes}B) from ${escapeHtml(ev.source_url ?? 'unknown')}`;
     case 'SYSCALL_EXECVE': return `pid ${ev.pid}: ${escapeHtml(ev.filename)} ${escapeHtml(ev.argv.join(' '))}`;
     case 'SYSCALL_CONNECT': return `pid ${ev.pid} &rarr; ${escapeHtml(ev.dest_ip)}:${ev.dest_port}`;
@@ -438,10 +820,19 @@ function eventDetail(ev) {
   }
 }
 
+function matchesSearch(ev, needle) {
+  if (!needle) return true;
+  const hay = [ev.command, ev.username, ev.password, ev.ip, ev.session_id, ev.source_url]
+    .filter(Boolean).join(' ').toLowerCase();
+  return hay.includes(needle);
+}
+
 function filteredFeed() {
+  const needle = state.feedSearch.toLowerCase();
   return state.feed.filter(ev =>
     (!state.kindFilter || ev.event === state.kindFilter) &&
-    (!state.ipFilter || ev.ip === state.ipFilter)
+    (!state.ipFilter || ev.ip === state.ipFilter) &&
+    matchesSearch(ev, needle)
   );
 }
 
@@ -534,6 +925,10 @@ document.getElementById('kind-filter').addEventListener('change', (e) => {
   state.kindFilter = e.target.value;
   renderFeed(0);
 });
+document.getElementById('feed-search').addEventListener('input', (e) => {
+  state.feedSearch = e.target.value;
+  renderFeed(0);
+});
 
 // A burst of SSE events (many commands in quick succession, several sessions
 // opening at once) used to trigger a full feed/payload re-render per event —
@@ -563,13 +958,21 @@ function flushRender() {
 
 function pushEvents(events, {fresh} = {fresh: false}) {
   if (!events.length) return;
+  events.forEach(markNovelty);
   state.feed = events.concat(state.feed).slice(0, FEED_CAP);
   for (const ev of events) {
     if (ev.event === 'SESSION_START' && ev.geo) {
       state.sessionGeo[ev.session_id] = { country: ev.geo.country, city: ev.geo.city };
     }
   }
-  if (fresh) pendingFreshCount += events.length;
+  if (fresh) {
+    pendingFreshCount += events.length;
+    // Live-triggered, debounced refresh instead of waiting on the map/IOC
+    // panels' own slower poll interval — a new session or payload shows up
+    // within ~2s instead of up to 15s.
+    if (events.some(ev => ev.event === 'SESSION_START')) scheduleGeoRefresh();
+    if (events.some(ev => ev.event === 'PAYLOAD_CAPTURED')) scheduleIocRefresh();
+  }
   if (renderScheduled) return;
   renderScheduled = true;
   if (document.hidden) {
@@ -794,9 +1197,16 @@ document.getElementById('replay-restart').addEventListener('click', () => {
 // Boot
 // ---------------------------------------------------------------------------
 
-loadInitialFeed().then(connectStream);
+// Known-values must land before the initial feed load so nothing in the
+// backlog gets retroactively flagged "NEW" — see markNovelty() above.
+loadKnownValues().then(loadInitialFeed).then(connectStream);
 refreshSummary();
 setInterval(refreshSummary, 4000);
+refreshGeo();
+setInterval(refreshGeo, 15000);
+refreshIocs();
+setInterval(refreshIocs, 15000);
+loadSessions(true);
 </script>
 </body>
 </html>
